@@ -1,0 +1,29 @@
+[package]
+name = "paladin"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+authors = ["Zach Brown <zbrown@polygon.technology>"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.75"
+dotenvy = "0.15.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+lapin = "2.3.1"
+tokio = { version = "1.32.0", features = ["full"] }
+tokio-executor-trait = "2.1.1"
+tokio-reactor-trait = "1.1.0"
+serde = "1.0.183"
+async-trait = "0.1.73"
+ciborium = "0.2.1"
+futures = "0.3.28"
+uuid = { version = "1.4.1", features = ["v4", "fast-rng"] }
+clap = { version = "4.4.2", features = ["derive", "env"] }
+opkind_derive = { path = "../opkind_derive" }
+
+[dev-dependencies]
+# Required for certain doc tests which showcase generic numeric operations
+num-traits = "0.2.16"

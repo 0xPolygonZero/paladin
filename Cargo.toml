@@ -1,0 +1,3 @@
+[workspace]
+members = ["paladin", "opkind_derive", "ops", "orchestrator", "worker"]
+resolver = "2"
