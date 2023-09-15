@@ -14,9 +14,10 @@ jobs:
         with:
           toolchain: nightly
           profile: minimal
+          override: true
           components: rustfmt
 
-      - name: Run cargo +nightly fmt --check
+      - name: Run cargo fmt --check
         uses: actions-rs/cargo@v1
         with:
           command: fmt
