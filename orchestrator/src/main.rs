@@ -24,15 +24,8 @@ async fn main() -> Result<()> {
     let args = Cli::parse();
     let runtime = get_runtime(&args.options).await?;
 
-    let string_concat = fold(
-        StringConcat,
-        map(
-            CharToString,
-            lit(indexed([
-                'h', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd', '!',
-            ])),
-        ),
-    );
+    let concat_input = indexed(['h', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd', '!']);
+    let string_concat = fold(StringConcat, map(CharToString, lit(concat_input)));
 
     let multiplication = fold(
         GenericMultiplication::<i32>::default(),
