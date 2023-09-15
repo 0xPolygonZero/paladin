@@ -1,28 +1,28 @@
 version: "3"
 services:
-  # orchestrator:
-  #   build:
-  #     context: .
-  #     dockerfile: orchestrator.Dockerfile
-  #   depends_on:
-  #     rabbitmq:
-  #       condition: service_healthy
-  #   environment:
-  #     - RUST_LOG=debug
-  #     - AMQP_URI=amqp://rabbitmq:5672
-  # worker:
-  #   build:
-  #     context: .
-  #     dockerfile: worker.Dockerfile
-  #   depends_on:
-  #     rabbitmq:
-  #       condition: service_healthy
-  #   environment:
-  #     - RUST_LOG=debug
-  #     - AMQP_URI=amqp://rabbitmq:5672
-  #   deploy:
-  #     mode: replicated
-  #     replicas: 6
+  orchestrator:
+    build:
+      context: .
+      dockerfile: orchestrator.Dockerfile
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - RUST_LOG=debug
+      - AMQP_URI=amqp://rabbitmq:5672
+  worker:
+    build:
+      context: .
+      dockerfile: worker.Dockerfile
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - RUST_LOG=debug
+      - AMQP_URI=amqp://rabbitmq:5672
+    deploy:
+      mode: replicated
+      replicas: 6
   rabbitmq:
     image: rabbitmq:3-management
     ports:
