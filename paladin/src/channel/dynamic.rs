@@ -20,23 +20,23 @@ use futures::{Sink, Stream, StreamExt};
 
 /// A [`Channel`] implementation that dynamically delegates to the given
 /// implementation.
-pub enum DynamicChannel<T: Serializable> {
-    AMQP(QueueChannel<T, AMQPConnection>),
+pub enum DynamicChannel {
+    AMQP(QueueChannel<AMQPConnection>),
 }
 
 #[async_trait]
-impl<T: Serializable> Channel<T> for DynamicChannel<T> {
+impl Channel for DynamicChannel {
     type Acker = Box<dyn Acker>;
-    type Sender = Box<dyn Sink<T, Error = anyhow::Error> + Send + Unpin>;
-    type Receiver = Box<dyn Stream<Item = (T, Self::Acker)> + Send + Unpin>;
+    type Sender<T: Serializable> = Box<dyn Sink<T, Error = anyhow::Error> + Send + Unpin>;
+    type Receiver<T: Serializable> = Box<dyn Stream<Item = (T, Self::Acker)> + Send + Unpin>;
 
-    async fn sender(&self) -> Result<Self::Sender> {
+    async fn sender<T: Serializable>(&self) -> Result<Self::Sender<T>> {
         match self {
             Self::AMQP(channel) => Ok(Box::new(channel.sender().await?)),
         }
     }
 
-    async fn receiver(&self) -> Result<Self::Receiver> {
+    async fn receiver<T: Serializable>(&self) -> Result<Self::Receiver<T>> {
         match self {
             Self::AMQP(channel) => {
                 Ok(Box::new(channel.receiver().await?.map(
@@ -64,15 +64,15 @@ pub enum DynamicChannelFactory {
 
 #[async_trait]
 impl ChannelFactory for DynamicChannelFactory {
-    type Channel<T: Serializable> = DynamicChannel<T>;
+    type Channel = DynamicChannel;
 
-    async fn get<T: Serializable>(&self, identifier: &str) -> Result<DynamicChannel<T>> {
+    async fn get(&self, identifier: &str) -> Result<DynamicChannel> {
         match self {
             Self::AMQP(factory) => Ok(DynamicChannel::AMQP(factory.get(identifier).await?)),
         }
     }
 
-    async fn issue<T: Serializable>(&self) -> Result<(String, DynamicChannel<T>)> {
+    async fn issue(&self) -> Result<(String, DynamicChannel)> {
         match self {
             Self::AMQP(factory) => {
                 let (identifier, channel) = factory.issue().await?;

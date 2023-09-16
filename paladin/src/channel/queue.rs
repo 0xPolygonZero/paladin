@@ -38,9 +38,9 @@
 //!     // Build the factory
 //!     let amqp_channel_factory = QueueChannelFactory::new(conn);
 //!     // Get a channel
-//!     let channel = amqp_channel_factory.get::<MyStruct>("my_queue").await?;
+//!     let channel = amqp_channel_factory.get("my_queue").await?;
 //!     // Get a sender pipe
-//!     let mut sender = channel.sender().await?;
+//!     let mut sender = channel.sender::<MyStruct>().await?;
 //!     // Dispatch a message
 //!     sender.send(MyStruct { field: "hello world".to_string() }).await?;
 //!
@@ -78,9 +78,9 @@
 //!     // Build the factory
 //!     let amqp_channel_factory = QueueChannelFactory::new(conn);
 //!     // Get a channel
-//!     let channel = amqp_channel_factory.get::<MyStruct>("my_queue").await?;
+//!     let channel = amqp_channel_factory.get("my_queue").await?;
 //!     // Get a receiver pipe
-//!     let mut receiver = channel.receiver().await?;
+//!     let mut receiver = channel.receiver::<MyStruct>().await?;
 //!     // Receive messages
 //!     while let Some((message, acker)) = receiver.next().await {
 //!         // ...
@@ -114,32 +114,30 @@ impl<Conn: Connection> QueueChannelFactory<Conn> {
 ///
 /// Note that sender, receiver, and release operations are all lazily evaluated
 /// -- the resources aren't actually allocated until they are used.
-pub struct QueueChannel<T: Serializable, Conn: Connection> {
+pub struct QueueChannel<Conn: Connection> {
     connection: Conn,
     identifier: String,
-    _phantom: std::marker::PhantomData<T>,
 }
 
 #[async_trait]
 impl<
-        T: Serializable,
         CHandle: Consumer,
         QHandle: QueueHandle<Consumer = CHandle>,
         Conn: Connection<QueueHandle = QHandle>,
-    > Channel<T> for QueueChannel<T, Conn>
+    > Channel for QueueChannel<Conn>
 {
     type Acker = CHandle::Acker;
-    type Sender = QueueSink<T, QHandle>;
-    type Receiver = CHandle::Stream<T>;
+    type Sender<T: Serializable> = QueueSink<T, QHandle>;
+    type Receiver<T: Serializable> = CHandle::Stream<T>;
 
     /// Get a sender for the underlying queue.
-    async fn sender(&self) -> Result<Self::Sender> {
+    async fn sender<T: Serializable>(&self) -> Result<Self::Sender<T>> {
         let queue = self.connection.declare_queue(&self.identifier).await?;
         Ok(QueueSink::new(queue))
     }
 
     /// Get a receiver for the underlying queue.
-    async fn receiver(&self) -> Result<Self::Receiver> {
+    async fn receiver<T: Serializable>(&self) -> Result<Self::Receiver<T>> {
         let queue = self.connection.declare_queue(&self.identifier).await?;
         let consumer = queue.declare_consumer("").await?;
 
@@ -155,26 +153,24 @@ impl<
 
 #[async_trait]
 impl<Conn: Connection> ChannelFactory for QueueChannelFactory<Conn> {
-    type Channel<T: Serializable> = QueueChannel<T, Conn>;
+    type Channel = QueueChannel<Conn>;
 
     /// Get an existing channel.
-    async fn get<T: Serializable>(&self, identifier: &str) -> Result<Self::Channel<T>> {
+    async fn get(&self, identifier: &str) -> Result<Self::Channel> {
         Ok(QueueChannel {
             connection: self.connection.clone(),
             identifier: identifier.to_string(),
-            _phantom: std::marker::PhantomData,
         })
     }
 
     /// Issue a new channel, generating a new UUID as the identifier.
-    async fn issue<T: Serializable>(&self) -> Result<(String, Self::Channel<T>)> {
+    async fn issue(&self) -> Result<(String, Self::Channel)> {
         let identifier = Uuid::new_v4().to_string();
         Ok((
             identifier.clone(),
             QueueChannel {
                 connection: self.connection.clone(),
                 identifier,
-                _phantom: std::marker::PhantomData,
             },
         ))
     }
