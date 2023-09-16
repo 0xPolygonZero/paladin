@@ -55,7 +55,11 @@ type Sender<Item> = Box<dyn Sink<Item, Error = anyhow::Error> + Send + Unpin>;
 type CoordinatedTaskChannel<Op, Metadata> = (
     String,
     Sender<Task<Op, Metadata>>,
-    LeaseGuard<DynamicChannel, Receiver<TaskResult<Op, Metadata>>>,
+    LeaseGuard<
+        AnyTaskResult<Op>,
+        DynamicChannel<AnyTaskResult<Op>>,
+        Receiver<TaskResult<Op, Metadata>>,
+    >,
 );
 
 /// The core of the distributed task management system.
@@ -69,7 +73,7 @@ type CoordinatedTaskChannel<Op, Metadata> = (
 /// on runtime semantics.
 pub struct Runtime<Kind: OpKind> {
     channel_factory: DynamicChannelFactory,
-    task_channel: DynamicChannel,
+    task_channel: DynamicChannel<AnyTask<Kind>>,
     serializer: Serializer,
     _kind: std::marker::PhantomData<Kind>,
 }
@@ -167,7 +171,7 @@ impl<Kind: OpKind> Runtime<Kind> {
         &self,
     ) -> Result<Sender<Task<Op, Metadata>>> {
         // Get a sink for the task channel, which accepts `AnyTask`.
-        let sink = self.task_channel.sender::<AnyTask<Kind>>().await?;
+        let sink = self.task_channel.sender().await?;
         let serializer = self.serializer;
         // Transform the sink to accept typed `Task`s by serializing them into
         // `AnyTask`s on behalf of the caller. This allows the caller to pass in
@@ -273,14 +277,16 @@ impl<Kind: OpKind> Runtime<Kind> {
     ) -> Result<CoordinatedTaskChannel<Op, Metadata>> {
         // Issue a new channel and return its identifier paired with a stream of
         // results.
-        let (task_sender, (result_channel_identifier, result_channel)) =
-            try_join!(self.get_task_sender(), self.channel_factory.issue())?;
+        let (task_sender, (result_channel_identifier, result_channel)) = try_join!(
+            self.get_task_sender(),
+            self.channel_factory.issue::<AnyTaskResult<Op>>()
+        )?;
 
         // Transform the stream to deserialize the results into typed `TaskResult`s on
         // behalf of the caller. This allows the caller to receive typed
         // `TaskResult`s without having to worry about deserialization.
         let receiver = result_channel
-            .receiver::<AnyTaskResult<Op>>()
+            .receiver()
             .await?
             .filter_map(move |(result, acker)| {
                 Box::pin(async move {
