@@ -207,14 +207,11 @@
 //! # }
 //! #
 //! use paladin::{
-//!     directive::{fold, indexed, lit},
+//!     directive::{indexed, Directive},
 //! };
 //!
 //! fn main () {
-//!     let expr = fold(
-//!         GenericMultiplication::<i32>::default(),
-//!         lit(indexed([1, 2, 3, 4, 5, 6])),
-//!     );
+//!     let expr = indexed([1, 2, 3, 4, 5, 6]).fold(GenericMultiplication::<i32>::default());
 //! }
 //! ```
 

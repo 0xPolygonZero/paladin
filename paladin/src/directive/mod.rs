@@ -44,6 +44,220 @@ pub mod evaluator;
 pub trait Directive: Send + Sync {
     type Input;
     type Output;
+
+    /// Fold this [`Directive`]'s output over the given [`Monoid::combine`]
+    /// until a single value is produced.
+    ///
+    /// Note that the output type of the this directive must be an indexed
+    /// stream (`Stream<Item = (usize, M::Elem)>`). This allows
+    /// parallelization of the operation while maintaining order.
+    ///
+    /// # Example
+    /// ```
+    /// # use paladin::{
+    /// #    operation::{Operation, Monoid},
+    /// #    directive::{Directive, Evaluator, indexed},
+    /// #    opkind_derive::OpKind,
+    /// #    runtime::Runtime,
+    /// #    config::{self, Config}
+    /// # };
+    /// # use serde::{Deserialize, Serialize};
+    /// # use anyhow::Result;
+    /// #
+    /// # #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+    /// struct Multiply;
+    /// impl Monoid for Multiply {
+    ///     type Elem = i32;
+    ///     type Kind = MyOps;
+    ///
+    ///     fn combine(&self, a: i32, b: i32) -> Result<i32> {
+    ///         Ok(a * b)
+    ///     }
+    ///
+    ///     fn empty(&self) -> i32 {
+    ///         1
+    ///     }
+    /// }
+    /// #
+    /// # #[derive(OpKind, Copy, Clone, Debug, Deserialize, Serialize)]
+    /// # enum MyOps {
+    /// #    Multiply(Multiply),
+    /// # }
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// # let runtime = Runtime::from_config(&Config { runtime: config::Runtime::InMemory, ..Default::default() }).await?;
+    /// let computation = indexed([1, 2, 3, 4, 5]).fold(Multiply);
+    /// let result = runtime.evaluate(computation).await?;
+    /// assert_eq!(result, 120);
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn fold<M, S>(self, op: M) -> Fold<M, Self::Output, Self>
+    where
+        M: Monoid,
+        S: Stream<Item = (usize, M::Elem)>,
+
+        Self: Sized + Directive<Output = S>,
+    {
+        Fold { op, input: self }
+    }
+
+    /// Map this [`Directive`]'s output over the given [`Operation`].
+    ///
+    /// Note that the output type of this directive and input type of the given
+    /// [`Operation`] must be an indexed stream (`Stream<Item = (usize,
+    /// Op::Input)>`). This allows parallelization of the operation while
+    /// maintaining order.
+    ///
+    /// # Example
+    ///
+    /// Computing the length of a stream of strings:
+    /// ```
+    /// # use paladin::{
+    /// #    operation::Operation,
+    /// #    directive::{Directive, Evaluator, indexed, unindexed},
+    /// #    opkind_derive::OpKind,
+    /// #    runtime::Runtime,
+    /// #    config::{self, Config}
+    /// # };
+    /// # use serde::{Deserialize, Serialize};
+    /// # use anyhow::Result;
+    /// # use futures::StreamExt;
+    /// #
+    /// # #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+    /// struct Length;
+    /// impl Operation for Length {
+    ///     type Input = String;
+    ///     type Output = usize;
+    ///     type Kind = MyOps;
+    ///
+    ///     fn execute(&self, input: String) -> Result<usize> {
+    ///         Ok(input.len())
+    ///     }
+    /// }
+    /// #
+    /// # #[derive(OpKind, Copy, Clone, Debug, Deserialize, Serialize)]
+    /// # enum MyOps {
+    /// #    Length(Length),
+    /// # }
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// # let runtime = Runtime::from_config(&Config { runtime: config::Runtime::InMemory, ..Default::default() }).await?;
+    /// let input = ["hel", "lo", " world", "!"].iter().map(|s| s.to_string());
+    /// let computation = indexed(input).map(Length);
+    /// let result = runtime.evaluate(computation).await?;
+    /// // The output is an indexed stream, convert it into a sorted vec
+    /// let vec_result = unindexed(result).await
+    ///     .into_iter()
+    ///     .collect::<Vec<_>>();
+    ///
+    /// assert_eq!(vec_result, vec![3, 2, 6, 1]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// Multiplying a stream of integers by 2:
+    ///
+    /// ```
+    /// # use paladin::{
+    /// #    operation::Operation,
+    /// #    directive::{Directive, Evaluator, indexed, unindexed},
+    /// #    opkind_derive::OpKind,
+    /// #    runtime::Runtime,
+    /// #    config::{self, Config}
+    /// # };
+    /// # use serde::{Deserialize, Serialize};
+    /// # use anyhow::Result;
+    /// #
+    /// # #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+    /// struct MultiplyBy(i32);
+    /// impl Operation for MultiplyBy {
+    ///     type Input = i32;
+    ///     type Output = i32;
+    ///     type Kind = MyOps;
+    ///
+    ///     fn execute(&self, input: i32) -> Result<i32> {
+    ///         Ok(self.0 * input)
+    ///     }
+    /// }
+    /// #
+    /// # #[derive(OpKind, Copy, Clone, Debug, Deserialize, Serialize)]
+    /// # enum MyOps {
+    /// #    MultiplyBy(MultiplyBy),
+    /// # }
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// # let runtime = Runtime::from_config(&Config { runtime: config::Runtime::InMemory, ..Default::default() }).await?;
+    /// let computation = indexed([1, 2, 3, 4, 5]).map(MultiplyBy(2));
+    /// let result = runtime.evaluate(computation).await?;
+    /// // The output is an indexed stream, convert it into a sorted vec
+    /// let vec_result = unindexed(result).await
+    ///     .into_iter()
+    ///     .collect::<Vec<_>>();
+    ///
+    /// assert_eq!(vec_result, vec![2, 4, 6, 8, 10]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn map<Op: Operation, S>(self, op: Op) -> Map<Op, S, Self>
+    where
+        S: Stream<Item = (usize, Op::Input)>,
+        Self: Sized + Directive<Output = S>,
+    {
+        Map { op, input: self }
+    }
+
+    /// Apply the given [`Operation`] to this [`Directive`]'s output.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use paladin::{
+    /// #    operation::Operation,
+    /// #    directive::{Directive, Evaluator, lit},
+    /// #    opkind_derive::OpKind,
+    /// #    runtime::Runtime,
+    /// #    config::{self, Config}
+    /// # };
+    /// # use serde::{Deserialize, Serialize};
+    /// # use anyhow::Result;
+    /// #
+    /// # #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+    /// struct MultiplyBy(i32);
+    /// impl Operation for MultiplyBy {
+    ///     type Input = i32;
+    ///     type Output = i32;
+    ///     type Kind = MyOps;
+    ///
+    ///     fn execute(&self, input: i32) -> Result<i32> {
+    ///         Ok(self.0 * input)
+    ///     }
+    /// }
+    /// #
+    /// # #[derive(OpKind, Copy, Clone, Debug, Deserialize, Serialize)]
+    /// # enum MyOps {
+    /// #    MultiplyBy(MultiplyBy),
+    /// # }
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// # let runtime = Runtime::from_config(&Config { runtime: config::Runtime::InMemory, ..Default::default() }).await?;
+    /// let computation = lit(21).apply(MultiplyBy(2));
+    /// let result = runtime.evaluate(computation).await?;
+    ///
+    /// assert_eq!(result, 42);
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn apply<Op: Operation>(self, op: Op) -> Apply<Op, Self>
+    where
+        Self: Sized + Directive<Output = Op::Input>,
+    {
+        Apply { op, input: self }
+    }
 }
 
 /// The [`Evaluator`] trait defines the evaluation mechanism for directives in
@@ -85,7 +299,9 @@ pub trait Evaluator<'a, D: Directive>: Sync {
     async fn evaluate(&'a self, directive: D) -> Result<D::Output>;
 }
 
-/// A [`Literal`] is a directive that lifts an arbitrary value into the
+/// Directive for [`lit`].
+///
+/// `Literal` is a directive that lifts an arbitrary value into the
 /// execution context, typically acting as leaves in the execution tree.
 #[derive(Debug)]
 pub struct Literal<Output: Send + Sync>(pub Output);
@@ -103,8 +319,11 @@ impl<Output: Send + Sync> Directive for Literal<Output> {
     type Output = Output;
 }
 
+/// [`Literal`] [`Evaluator`] for all evaluators.
+///
 /// [`Literal`]s shouldn't need to vary by [`Evaluator`], so a blanket
-/// [`Literal`] evaluator implementation is provided.
+/// [`Literal`] evaluator implementation is provided. It simply returns the
+/// inner value.
 #[async_trait]
 impl<'a, Output: Send + Sync + 'a, T: Send + Sync> Evaluator<'a, Literal<Output>> for T {
     async fn evaluate(&'a self, op: Literal<Output>) -> Result<Output> {
@@ -112,10 +331,7 @@ impl<'a, Output: Send + Sync + 'a, T: Send + Sync> Evaluator<'a, Literal<Output>
     }
 }
 
-/// Function application.
-///
-/// [`Apply`] is a directive that applies the given [`Operation`] to the given
-/// input.
+/// Directive for [`apply`](Directive::apply).
 #[derive(Debug)]
 pub struct Apply<Op: Operation, Input: Directive<Output = Op::Input>> {
     op: Op,
@@ -127,51 +343,77 @@ impl<Op: Operation, Input: Directive<Output = Op::Input>> Directive for Apply<Op
     type Output = Op::Output;
 }
 
-/// Function application.
+/// Utility for creating an indexed stream (`Stream<Item = (usize,
+/// Op::Input)>`) from any [`IntoIterator`].
 ///
-/// [`Apply`] is a directive that applies the given [`Operation`] to the given
-/// input.
-pub fn apply<Op: Operation, Input: Directive<Output = Op::Input>>(
-    op: Op,
-    input: Input,
-) -> Apply<Op, Input> {
-    Apply { op, input }
-}
-
-/// Utility for creating an indexed stream from any [`IntoIterator`].
-pub struct IndexedStream<Item, IntoIter: IntoIterator<Item = Item>> {
-    iter: futures::stream::Iter<
-        std::iter::Enumerate<<IntoIter as std::iter::IntoIterator>::IntoIter>,
-    >,
-}
-
-impl<Item, IntoIter: IntoIterator<Item = Item>> IndexedStream<Item, IntoIter> {
-    pub fn new(iter: IntoIter) -> Self {
-        Self {
-            iter: futures::stream::iter(iter.into_iter().enumerate()),
-        }
-    }
-}
-
-/// Utility for creating an [`IndexedStream`] from any [`IntoIterator`].
+/// This is useful for lifting iterable values into the execution context such
+/// that they can be used by directives that expect an indexed stream as input,
+/// like [`Map`] or [`Fold`].
+///
+/// # Example
+/// ```
+/// # use paladin::{
+/// #    operation::{Operation, Monoid},
+/// #    directive::{Directive, Evaluator, indexed},
+/// #    opkind_derive::OpKind,
+/// #    runtime::Runtime,
+/// #    config::{self, Config}
+/// # };
+/// # use serde::{Deserialize, Serialize};
+/// # use anyhow::Result;
+/// #
+/// # #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+/// struct Multiply;
+/// impl Monoid for Multiply {
+///     type Elem = i32;
+///     type Kind = MyOps;
+///
+///     fn combine(&self, a: i32, b: i32) -> Result<i32> {
+///         Ok(a * b)
+///     }
+///
+///     fn empty(&self) -> i32 {
+///         1
+///     }
+/// }
+/// #
+/// # #[derive(OpKind, Copy, Clone, Debug, Deserialize, Serialize)]
+/// # enum MyOps {
+/// #    Multiply(Multiply),
+/// # }
+///
+/// # #[tokio::main]
+/// # async fn main() -> Result<()> {
+/// # let runtime = Runtime::from_config(&Config { runtime: config::Runtime::InMemory, ..Default::default() }).await?;
+/// let computation = indexed([1, 2, 3, 4, 5]).fold(Multiply);
+/// let result = runtime.evaluate(computation).await?;
+/// assert_eq!(result, 120);
+/// # Ok(())
+/// # }
+/// ```
 pub fn indexed<Item, IntoIter: IntoIterator<Item = Item>>(
     iter: IntoIter,
-) -> IndexedStream<Item, IntoIter> {
-    IndexedStream::new(iter)
+) -> Literal<
+    futures::stream::Iter<std::iter::Enumerate<<IntoIter as std::iter::IntoIterator>::IntoIter>>,
+>
+where
+    IntoIter::IntoIter: Send + Sync,
+{
+    lit(futures::stream::iter(iter.into_iter().enumerate()))
 }
 
-/// Stream implementation for [`IndexedStream`].
-impl<Item, IntoIter: IntoIterator<Item = Item>> Stream for IndexedStream<Item, IntoIter> {
-    type Item = (usize, Item);
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        self.iter.poll_next_unpin(cx)
-    }
+/// Utility for converting an indexed stream (`Stream<Item = (usize, Item)>`)
+/// into a sorted [`IntoIterator`].
+pub async fn unindexed<Item, S: Stream<Item = (usize, Item)>>(
+    stream: S,
+) -> impl IntoIterator<Item = Item> {
+    let mut vec = stream.collect::<Vec<_>>().await;
+    vec.sort_by(|a, b| a.0.cmp(&b.0));
+    vec.into_iter().map(|(_, v)| v)
 }
 
+/// Directive for [`map`](Directive::map).
+///
 /// [`Map`] applies a given [`Operation`] to each element of the input.
 ///
 /// Generally speaking, [`Map`] implementations should be order preserving in
@@ -200,18 +442,8 @@ impl<
     type Output = Box<dyn Stream<Item = (usize, Op::Output)> + Send + Unpin>;
 }
 
-/// Map the given [`Operation`] over the given input.
-pub fn map<
-    Op: Operation,
-    InputStream: Stream<Item = (usize, Op::Input)>,
-    Input: Directive<Output = InputStream>,
->(
-    op: Op,
-    input: Input,
-) -> Map<Op, InputStream, Input> {
-    Map { op, input }
-}
-
+/// Directive for [`fold`](Directive::fold).
+///
 /// A [`Fold`] combines elements of the given input stream with the provided
 /// [`Monoid::combine`] until a single value is produced.
 ///
@@ -236,17 +468,4 @@ impl<
 {
     type Input = Input;
     type Output = Op::Elem;
-}
-
-/// Fold the given input stream using the provided [`Monoid::combine`] until a
-/// single value is produced.
-pub fn fold<
-    Op: Monoid,
-    InputStream: Stream<Item = (usize, Op::Elem)>,
-    Input: Directive<Output = InputStream>,
->(
-    op: Op,
-    input: Input,
-) -> Fold<Op, InputStream, Input> {
-    Fold { op, input }
 }
