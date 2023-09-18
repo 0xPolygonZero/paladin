@@ -1,11 +1,11 @@
 //! Task and TaskResult types.
 //!
 //! Tasks encode an [`Operation`] paired with arguments and additional metadata.
-//! They represent the payloads used to communicate between channels in the
-//! [`Runtime`].
+//! They represent the payloads used to communicate between
+//! [`Runtime`](crate::runtime::Runtime)s and [`WorkerRuntime`]s.
 use crate::{
     operation::{OpKind, Operation},
-    runtime::Runtime,
+    runtime::WorkerRuntime,
     serializer::{Serializable, Serializer},
 };
 use anyhow::Result;
@@ -127,10 +127,10 @@ impl<Op: Operation> AnyTaskResult<Op> {
 /// unless you really want to do something custom.
 ///
 /// In summary, this trait is used to execute a [`Task`] on a
-/// [`Runtime`](crate::runtime::Runtime). Once the task has been executed, the
-/// result should be sent back to the caller via the
+/// [`WorkerRuntime`](crate::runtime::WorkerRuntime). Once the task has been
+/// executed, the result should be sent back to the caller via the
 /// [`Channel`](crate::channel::Channel) at the [`Task`]s identifier.
 #[async_trait]
 pub trait RemoteExecute<Kind: OpKind> {
-    async fn remote_execute(self, runtime: &Runtime<Kind>) -> Result<()>;
+    async fn remote_execute(self, runtime: &WorkerRuntime<Kind>) -> Result<()>;
 }

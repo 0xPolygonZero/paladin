@@ -163,7 +163,7 @@ pub fn op_kind_derive(input: TokenStream) -> TokenStream {
 
         #[::async_trait::async_trait]
         impl ::paladin::task::RemoteExecute<#name> for ::paladin::task::AnyTask<#name> {
-            async fn remote_execute(self, runtime: &::paladin::runtime::Runtime<#name>) -> ::anyhow::Result<()> {
+            async fn remote_execute(self, runtime: &::paladin::runtime::WorkerRuntime<#name>) -> ::anyhow::Result<()> {
                 match self.op_kind {
                     #(#match_arms)*,
                 }

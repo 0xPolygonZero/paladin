@@ -105,3 +105,23 @@ impl<A: Acker, F: Fn() + Send + Sync + 'static> Acker for ComposedAcker<A, F> {
         result
     }
 }
+
+/// Acker implementation that does nothing.
+///
+/// Useful for testing purposes where channels are emulated in-memory.
+#[derive(Default)]
+pub struct NoopAcker;
+
+impl NoopAcker {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl Acker for NoopAcker {
+    async fn ack(&self) -> Result<()> {
+        // noop
+        Ok(())
+    }
+}

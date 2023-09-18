@@ -36,9 +36,9 @@ trait Sender {
 /// is needed.
 #[async_trait]
 pub trait Channel: Send + Sync + 'static {
-    type Sender<T: Serializable>: Sink<T, Error = anyhow::Error> + Send;
+    type Sender<T: Serializable>: Sink<T, Error = anyhow::Error> + Send + Sync;
     type Acker: Acker;
-    type Receiver<T: Serializable>: Stream<Item = (T, Self::Acker)> + Send;
+    type Receiver<T: Serializable>: Stream<Item = (T, Self::Acker)> + Send + Sync;
 
     /// Acquire the sender side of the channel.
     async fn sender<T: Serializable>(&self) -> Result<Self::Sender<T>>;
@@ -126,5 +126,4 @@ impl<C: Channel, Pipe> Drop for LeaseGuard<C, Pipe> {
 }
 
 pub mod coordinated_channel;
-pub mod dynamic;
 pub mod queue;

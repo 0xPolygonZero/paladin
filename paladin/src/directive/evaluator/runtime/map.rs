@@ -4,7 +4,7 @@ use crate::{
     directive::{Directive, Evaluator, Map},
     operation::{OpKind, Operation},
     runtime::Runtime,
-    task::Task,
+    task::{AnyTask, RemoteExecute, Task},
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -27,6 +27,7 @@ impl<
     > Evaluator<'a, Map<Op, InputStream, Input>> for Runtime<Kind>
 where
     Runtime<Kind>: Evaluator<'a, Input>,
+    AnyTask<Kind>: RemoteExecute<Kind>,
 {
     #[instrument(skip_all, fields(directive = "Map", op = ?map.op), level = "debug")]
     async fn evaluate(

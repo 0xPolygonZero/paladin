@@ -100,6 +100,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 /// A [`ChannelFactory`] implementation for a queue.
+#[derive(Clone)]
 pub struct QueueChannelFactory<Conn: Connection> {
     connection: Conn,
 }
@@ -114,6 +115,7 @@ impl<Conn: Connection> QueueChannelFactory<Conn> {
 ///
 /// Note that sender, receiver, and release operations are all lazily evaluated
 /// -- the resources aren't actually allocated until they are used.
+#[derive(Clone)]
 pub struct QueueChannel<Conn: Connection> {
     connection: Conn,
     identifier: String,

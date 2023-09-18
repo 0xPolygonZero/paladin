@@ -311,37 +311,6 @@ impl QueueHandle for AMQPQueueHandle {
             serializer: self.serializer,
         })
     }
-
-    /// Delete a queue.
-    /// ```no_run
-    /// use paladin::{
-    ///     serializer::Serializer,
-    ///     queue::{Queue, Connection, QueueHandle, amqp::{AMQPQueue, AMQPQueueOptions}}
-    /// };
-    /// use serde::{Serialize, Deserialize};
-    /// use anyhow::Result;
-    ///
-    /// #[tokio::main]
-    /// async fn main() -> Result<()> {
-    ///    let amqp = AMQPQueue::new(AMQPQueueOptions {
-    ///         uri: "amqp://localhost:5672",
-    ///         qos: Some(1),
-    ///         serializer: Serializer::Cbor,
-    ///     });
-    ///     let conn = amqp.get_connection().await?;
-    ///     let queue = conn.declare_queue("my_queue").await?;
-    ///     queue.delete().await?;
-    ///
-    ///     Ok(())
-    /// }
-    #[instrument(skip(self), level = "trace")]
-    async fn delete(self) -> Result<()> {
-        self.channel
-            .queue_delete(&self.name, Default::default())
-            .await?;
-
-        Ok(())
-    }
 }
 
 /// A consumer instance for an [`AMQPQueueHandle`].

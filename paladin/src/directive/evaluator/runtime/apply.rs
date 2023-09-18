@@ -4,7 +4,7 @@ use crate::{
     directive::{Apply, Directive, Evaluator},
     operation::{OpKind, Operation},
     runtime::Runtime,
-    task::Task,
+    task::{AnyTask, RemoteExecute, Task},
 };
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -16,6 +16,7 @@ impl<'a, Kind: OpKind, Op: Operation<Kind = Kind>, Input: Directive<Output = Op:
     Evaluator<'a, Apply<Op, Input>> for Runtime<Kind>
 where
     Runtime<Kind>: Evaluator<'a, Input>,
+    AnyTask<Kind>: RemoteExecute<Kind>,
 {
     #[instrument(skip_all, fields(directive = "Apply", op = ?apply.op), level = "debug")]
     async fn evaluate(&'a self, apply: Apply<Op, Input>) -> Result<Op::Output> {

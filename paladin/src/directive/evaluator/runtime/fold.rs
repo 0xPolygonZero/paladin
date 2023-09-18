@@ -5,7 +5,7 @@ use crate::{
     directive::{Directive, Evaluator, Fold},
     operation::{Monoid, OpKind, Operation},
     runtime::Runtime,
-    task::{Task, TaskResult},
+    task::{AnyTask, RemoteExecute, Task, TaskResult},
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -56,7 +56,7 @@ impl<Op: Operation> Contiguous for TaskResult<Op, Metadata> {
     }
 }
 
-type Sender<Op> = Box<dyn Sink<Task<Op, Metadata>, Error = anyhow::Error> + Send + Unpin>;
+type Sender<Op> = Box<dyn Sink<Task<Op, Metadata>, Error = anyhow::Error> + Send + Sync + Unpin>;
 
 /// A [`Dispatcher`] abstracts over the common functionality of queuing and
 /// dispatching contiguous [`Task`]s to worker processes.
@@ -134,6 +134,7 @@ impl<
     > Evaluator<'a, Fold<Op, InputStream, Input>> for Runtime<Kind>
 where
     Runtime<Kind>: Evaluator<'a, Input>,
+    AnyTask<Kind>: RemoteExecute<Kind>,
 {
     #[instrument(skip_all, fields(directive = "Fold", op = ?fold.op), level = "debug")]
     async fn evaluate(&'a self, fold: Fold<Op, InputStream, Input>) -> Result<Op::Elem> {

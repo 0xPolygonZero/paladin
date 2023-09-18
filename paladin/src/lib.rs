@@ -1,13 +1,11 @@
+pub mod acker;
 pub mod channel;
 pub mod config;
 pub mod contiguous;
 pub mod directive;
-mod global;
 pub mod operation;
 pub mod queue;
 pub mod runtime;
 pub mod serializer;
 pub mod task;
-pub use global::*;
-pub mod acker;
 pub use opkind_derive;

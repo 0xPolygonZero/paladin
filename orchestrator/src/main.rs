@@ -5,8 +5,9 @@ use ops::{CharToString, GenericMultiplication, MultiplyBy, StringConcat};
 use paladin::{
     config::Config,
     directive::{apply, fold, indexed, lit, map, Evaluator},
-    get_runtime,
+    runtime::Runtime,
 };
+use tracing::info;
 mod init;
 
 #[derive(Parser, Debug)]
@@ -21,12 +22,13 @@ async fn main() -> Result<()> {
     init::tracing();
 
     let args = Cli::parse();
-    let runtime = get_runtime(&args.options).await?;
+    let runtime = Runtime::from_config(&args.options).await?;
 
     let concat_input = indexed(['h', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd', '!']);
     let string_concat = fold(StringConcat, map(CharToString, lit(concat_input)));
     let result = runtime.evaluate(string_concat).await?;
     assert_eq!(result, "hello world!".to_string());
+    info!("result: {}", result);
 
     let multiplication = fold(
         GenericMultiplication::<i32>::default(),
@@ -34,10 +36,12 @@ async fn main() -> Result<()> {
     );
     let result = runtime.evaluate(multiplication).await?;
     assert_eq!(result, 720);
+    info!("result: {}", result);
 
     let multiply_by = apply(MultiplyBy(3), lit(2));
     let result = runtime.evaluate(multiply_by).await?;
     assert_eq!(result, 6);
+    info!("result: {}", result);
 
     std::future::pending::<()>().await;
     Ok(())

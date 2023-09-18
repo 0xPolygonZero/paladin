@@ -4,6 +4,12 @@
 //! focusing on the interplay between operations, their invocations as tasks,
 //! and higher-order directives that manage these tasks.
 //!
+//! It provides two runtimes:
+//! - [`Runtime`]: Used by the orchestrator to manage the execution of tasks.
+//! - [`WorkerRuntime`]: Used by worker nodes to execute tasks.
+//!
+//! # Semantic Overview
+//!
 //! - [`Operation`]: Defines the signature and semantics of a computation. Akin
 //!   to a function that maps an input to an output.
 //! - [`Task`]: Represents the invocation of an operation with specific
@@ -29,29 +35,34 @@
 //! - [`Task`] channels must accommodate arbitrary operations, listening on a
 //!   single, heterogenous stream of results.
 //!
+//! Practically, this is implemented by using a single, stable channel for
+//! [`Task`]s, and dynamically issuing new channels in context of each
+//! [`Directive`](crate::directive::Directive)'s evaluation. This allows workers
+//! to listen on a single channel and thus execute arbitrary [`Task`]s, while
+//! [`Directive`](crate::directive::Directive)s can listen on an isolated
+//! channel for their results.
+//!
 //! The [`Runtime`] is implements the semantics of this architecture.
 //! Fundamentally, the [`Runtime`] is responsible for managing the channels that
 //! [`Task`]s and [`Directive`](crate::directive::Directive)s use to
 //! communicate, and provides a simple interface for interacting with these
 //! channels.
+use self::dynamic_channel::{DynamicChannel, DynamicChannelFactory};
 use crate::{
     acker::{Acker, ComposedAcker},
-    channel::{
-        coordinated_channel::coordinated_channel,
-        dynamic::{DynamicChannel, DynamicChannelFactory},
-        Channel, ChannelFactory, LeaseGuard,
-    },
+    channel::{coordinated_channel::coordinated_channel, Channel, ChannelFactory, LeaseGuard},
+    config::Config,
     operation::{OpKind, Operation},
     serializer::{Serializable, Serializer},
-    task::{AnyTask, AnyTaskResult, Task, TaskResult},
+    task::{AnyTask, AnyTaskResult, RemoteExecute, Task, TaskResult},
 };
 use anyhow::Result;
 use futures::{Sink, SinkExt, Stream, StreamExt};
-use tokio::try_join;
-use tracing::{error, instrument};
+use tokio::{task::JoinHandle, try_join};
+use tracing::{debug_span, error, instrument, Instrument};
 
-type Receiver<Item> = Box<dyn Stream<Item = (Item, Box<dyn Acker>)> + Send + Unpin>;
-type Sender<Item> = Box<dyn Sink<Item, Error = anyhow::Error> + Send + Unpin>;
+type Receiver<Item> = Box<dyn Stream<Item = (Item, Box<dyn Acker>)> + Send + Sync + Unpin>;
+type Sender<Item> = Box<dyn Sink<Item, Error = anyhow::Error> + Send + Sync + Unpin>;
 type CoordinatedTaskChannel<Op, Metadata> = (
     String,
     Sender<Task<Op, Metadata>>,
@@ -65,84 +76,90 @@ type CoordinatedTaskChannel<Op, Metadata> = (
 /// communicate, and provides a simple interface for interacting with these
 /// channels.
 ///
+/// This runtime should be used in an orchestration context, where a single node
+/// is responsible for managing the execution of tasks. This is in contrast to
+/// the [`WorkerRuntime`], which is used by worker nodes that execute tasks.
+///
+/// The primary purpose of this runtime is to facilitate the instantiation of
+/// new coordination channels for dispatching [`Task`]s and receiving their
+/// associated [`TaskResult`]s. It takes care of namespacing new result channels
+/// such that users can consume them in an isolated manner.
+/// [`Directive`](crate::directive::Directive)s will use this to create a siloed
+/// channel upon which they can listen to only the results of the [`Task`]s they
+/// manage. It also takes care of synchronizing disparate sender and receiver
+/// channels such that closing the sender terminates the receiver.
+///
+/// ## Emulation
+/// The main [`Runtime`] provides emulation functionality for the worker. This
+/// can be enabled by passing the
+/// [`config::Runtime::InMemory`](crate::config::Runtime::InMemory) field as
+/// part of the configuration to [`Runtime::from_config`]. This will spin up a
+/// multi-threaded worker emulator that will execute multiple [`WorkerRuntime`]s
+/// concurrently. This can be used to simulate a distributed environment
+/// in-memory, and finds immediate practical use in writing tests.
+///
 /// See the [runtime module documentation](crate::runtime) for more information
 /// on runtime semantics.
 pub struct Runtime<Kind: OpKind> {
     channel_factory: DynamicChannelFactory,
     task_channel: DynamicChannel,
     serializer: Serializer,
+    worker_emulator: Option<Vec<JoinHandle<Result<()>>>>,
     _kind: std::marker::PhantomData<Kind>,
 }
 
-impl<Kind: OpKind> Runtime<Kind> {
-    /// Initializes the [`Runtime`].
-    pub async fn initialize(
-        channel_factory: DynamicChannelFactory,
-        task_bus_routing_key: &str,
-        serializer: Serializer,
-    ) -> Result<Self> {
-        let task_channel = channel_factory.get(task_bus_routing_key).await?;
+impl<Kind: OpKind> Runtime<Kind>
+where
+    AnyTask<Kind>: RemoteExecute<Kind>,
+{
+    /// Initializes the [`Runtime`] with the provided [`Config`].
+    pub async fn from_config(config: &Config) -> Result<Self> {
+        let channel_factory = DynamicChannelFactory::from_config(config).await?;
+        let task_channel = channel_factory.get(&config.task_bus_routing_key).await?;
+        let serializer = Serializer::from(config);
+
+        // Spin up an emulator for the worker runtime if we're running in-memory.
+        let worker_emulator = match config.runtime {
+            crate::config::Runtime::InMemory => Some(Self::spawn_emulator(
+                channel_factory.clone(),
+                task_channel.clone(),
+                None,
+            )),
+            _ => None,
+        };
+
         Ok(Self {
             channel_factory,
             task_channel,
             serializer,
+            worker_emulator,
             _kind: std::marker::PhantomData,
         })
     }
 
-    /// Provides a [`Stream`] incoming [`AnyTask`]s.
+    /// Spawns an emulator for the worker runtime.
     ///
-    /// Typically the the worker node's first interaction with the [`Runtime`].
-    /// This is how workers receive [`Task`]s for remote execution.
-    ///
-    /// # Example
-    /// ```no_run
-    /// use clap::Parser;
-    /// use paladin::{config::Config, get_runtime, operation::Operation, opkind_derive::OpKind};
-    /// use serde::{Deserialize, Serialize};
-    /// use anyhow::Result;
-    /// use futures::StreamExt;
-    ///
-    /// # #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
-    /// # struct StringLength;
-    /// #
-    /// # impl Operation for StringLength {
-    /// #    type Input = String;
-    /// #    type Output = usize;
-    /// #    type Kind = MyOps;
-    /// #    
-    /// #    fn execute(&self, input: Self::Input) -> Result<Self::Output> {
-    /// #        Ok(input.len())
-    /// #    }
-    /// # }
-    /// #
-    /// #[derive(OpKind, Serialize, Deserialize, Debug, Clone, Copy)]
-    /// enum MyOps {
-    ///     // ... your operations
-    /// #   StringLength(StringLength),
-    /// }
-    ///
-    /// #[derive(Parser, Debug)]
-    /// pub struct Cli {
-    ///     #[command(flatten)]
-    ///     pub options: Config,
-    /// }
-    ///
-    /// #[tokio::main]
-    /// async fn main() -> Result<()> {
-    ///     let args = Cli::parse();
-    ///     let runtime = get_runtime::<MyOps>(&args.options).await?;
-    ///     
-    ///     let mut task_stream = runtime.get_task_receiver().await?;
-    ///     while let Some((task, delivery)) = task_stream.next().await {
-    ///         // ... handle task   
-    ///     }
-    /// #  Ok(())
-    /// }
-    /// ```
-    #[instrument(skip_all, level = "debug")]
-    pub async fn get_task_receiver(&self) -> Result<Receiver<AnyTask<Kind>>> {
-        self.task_channel.receiver().await
+    /// This is used to emulate the worker runtime when running in-memory.
+    fn spawn_emulator(
+        channel_factory: DynamicChannelFactory,
+        task_channel: DynamicChannel,
+        num_threads: Option<usize>,
+    ) -> Vec<JoinHandle<Result<()>>> {
+        (0..(num_threads.unwrap_or(10)))
+            .map(|_| {
+                let channel_factory = channel_factory.clone();
+                let task_channel = task_channel.clone();
+                tokio::spawn(async move {
+                    let worker_runtime: WorkerRuntime<Kind> = WorkerRuntime {
+                        channel_factory,
+                        task_channel,
+                        _kind: std::marker::PhantomData,
+                    };
+                    worker_runtime.main_loop().await?;
+                    Ok(())
+                })
+            })
+            .collect()
     }
 
     /// Provides a [`Sink`] for dispatching [`Task`]s of the specified
@@ -163,7 +180,7 @@ impl<Kind: OpKind> Runtime<Kind> {
     /// [`Directive`](crate::directive::Directive) needs to coordinate the
     /// results of multiple [`Task`]s.
     #[instrument(skip_all, level = "debug")]
-    pub async fn get_task_sender<Op: Operation<Kind = Kind>, Metadata: Serializable>(
+    async fn get_task_sender<Op: Operation<Kind = Kind>, Metadata: Serializable>(
         &self,
     ) -> Result<Sender<Task<Op, Metadata>>> {
         // Get a sink for the task channel, which accepts `AnyTask`.
@@ -322,11 +339,55 @@ impl<Kind: OpKind> Runtime<Kind> {
             LeaseGuard::new(result_channel, Box::new(ack_composed_receiver)),
         ))
     }
+}
+
+/// Drop the worker emulator when the runtime is dropped.
+impl<Kind: OpKind> Drop for Runtime<Kind> {
+    fn drop(&mut self) {
+        if let Some(worker_emulator) = self.worker_emulator.take() {
+            for handle in worker_emulator {
+                handle.abort();
+            }
+        }
+    }
+}
+
+/// A runtime for worker nodes.
+///
+/// This runtime provides functionality for the three responsibilities of a
+/// worker process.
+/// 1. Listen for new [`Task`](crate::task::Task)s.
+/// 2. Execute those [`Task`](crate::task::Task)s.
+/// 3. Send back the results of a [`Task`](crate::task::Task) execution.
+pub struct WorkerRuntime<Kind: OpKind> {
+    channel_factory: DynamicChannelFactory,
+    task_channel: DynamicChannel,
+    _kind: std::marker::PhantomData<Kind>,
+}
+
+impl<Kind: OpKind> WorkerRuntime<Kind>
+where
+    AnyTask<Kind>: RemoteExecute<Kind>,
+{
+    /// Initializes the [`WorkerRuntime`] with the provided [`Config`].
+    pub async fn from_config(config: &Config) -> Result<Self> {
+        let channel_factory = DynamicChannelFactory::from_config(config).await?;
+        let task_channel = channel_factory.get(&config.task_bus_routing_key).await?;
+
+        Ok(Self {
+            channel_factory,
+            task_channel,
+            _kind: std::marker::PhantomData,
+        })
+    }
 
     /// Provides a [`Sink`] for dispatching [`AnyTaskResult`]s.
     ///
     /// Typically used by a worker node for send back the results of a [`Task`]
     /// execution.
+    ///
+    /// The [`opkind_derive::OpKind`] macro uses this internally to provide a
+    /// [`RemoteExecute`] implementation for [`AnyTask`].
     #[instrument(skip(self), level = "debug")]
     pub async fn get_result_sender<Op: Operation>(
         &self,
@@ -334,6 +395,141 @@ impl<Kind: OpKind> Runtime<Kind> {
     ) -> Result<Sender<AnyTaskResult<Op>>> {
         self.channel_factory.get(identifier).await?.sender().await
     }
+
+    /// Provides a [`Stream`] incoming [`AnyTask`]s.
+    ///
+    /// Typically the the worker node's first interaction with the [`Runtime`].
+    /// This is how workers receive [`Task`]s for remote execution.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use clap::Parser;
+    /// use paladin::{config::Config, runtime::WorkerRuntime, operation::Operation, opkind_derive::OpKind};
+    /// use serde::{Deserialize, Serialize};
+    /// use anyhow::Result;
+    /// use futures::StreamExt;
+    ///
+    /// # #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+    /// # struct StringLength;
+    /// #
+    /// # impl Operation for StringLength {
+    /// #    type Input = String;
+    /// #    type Output = usize;
+    /// #    type Kind = MyOps;
+    /// #    
+    /// #    fn execute(&self, input: Self::Input) -> Result<Self::Output> {
+    /// #        Ok(input.len())
+    /// #    }
+    /// # }
+    /// #
+    /// #[derive(OpKind, Serialize, Deserialize, Debug, Clone, Copy)]
+    /// enum MyOps {
+    ///     // ... your operations
+    /// #   StringLength(StringLength),
+    /// }
+    ///
+    /// #[derive(Parser, Debug)]
+    /// pub struct Cli {
+    ///     #[command(flatten)]
+    ///     pub options: Config,
+    /// }
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<()> {
+    ///     let args = Cli::parse();
+    ///     let runtime: WorkerRuntime<MyOps> = WorkerRuntime::from_config(&args.options).await?;
+    ///     
+    ///     let mut task_stream = runtime.get_task_receiver().await?;
+    ///     while let Some((task, delivery)) = task_stream.next().await {
+    ///         // ... handle task   
+    ///     }
+    /// #  Ok(())
+    /// }
+    /// ```
+    #[instrument(skip_all, level = "debug")]
+    pub async fn get_task_receiver(&self) -> Result<Receiver<AnyTask<Kind>>> {
+        self.task_channel.receiver().await
+    }
+
+    /// A default worker loop that can be used to process
+    /// [`Task`](crate::task::Task)s.
+    ///
+    /// Worker implementations generally wont vary, as the their
+    /// primary responsibility is to process incoming tasks. We provide one
+    /// out of the box that will work for most use cases. Users are free to
+    /// implement their own if they need to.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use anyhow::Result;
+    /// use paladin::{
+    ///     runtime::WorkerRuntime,
+    ///     config::Config,
+    ///     task::Task,
+    ///     operation::Operation,
+    ///     opkind_derive::OpKind,
+    /// };
+    /// use clap::Parser;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(OpKind, Serialize, Deserialize, Debug, Clone, Copy)]
+    /// enum MyOps {
+    ///     // ... your operations
+    /// #   StringLength(StringLength),
+    /// }
+    ///
+    /// #[derive(Serialize, Deserialize)]
+    /// struct Metadata {
+    ///     id: usize,
+    /// }
+    /// # #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+    /// # struct StringLength;
+    /// # impl Operation for StringLength {
+    /// #    type Input = String;
+    /// #    type Output = usize;
+    /// #    type Kind = MyOps;
+    /// #    
+    /// #    fn execute(&self, input: Self::Input) -> Result<Self::Output> {
+    /// #       Ok(input.len())
+    /// #    }
+    /// # }
+    ///
+    /// #[derive(Parser, Debug)]
+    /// pub struct Cli {
+    ///     #[command(flatten)]
+    ///     pub options: Config,
+    /// }
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<()> {
+    ///     let args = Cli::parse();
+    ///     let runtime = WorkerRuntime::from_config(&args.options).await?;
+    ///     runtime.main_loop().await?;
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn main_loop(&self) -> Result<()> {
+        let mut task_stream = self.get_task_receiver().await?;
+
+        while let Some((payload, delivery)) = task_stream.next().await {
+            let span = debug_span!("remote_execute", routing_key = %payload.routing_key, op = ?payload.op_kind);
+
+            let execution = {
+                payload.remote_execute(self).instrument(span).await?;
+
+                delivery.ack().await?;
+
+                Ok::<(), anyhow::Error>(())
+            };
+
+            if let Err(e) = execution {
+                error!("Failed to process task {e}");
+            }
+        }
+
+        Ok(())
+    }
 }
 
-pub mod worker;
+mod dynamic_channel;

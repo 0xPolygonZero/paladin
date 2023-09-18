@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Parser;
 use dotenvy::dotenv;
 use ops::Ops;
-use paladin::{config::Config, runtime::worker::worker_loop};
+use paladin::{config::Config, runtime::WorkerRuntime};
 
 mod init;
 
@@ -18,7 +18,8 @@ async fn main() -> Result<()> {
     init::tracing();
     let args = Cli::parse();
 
-    worker_loop::<Ops>(&args.options).await?;
+    let runtime: WorkerRuntime<Ops> = WorkerRuntime::from_config(&args.options).await?;
+    runtime.main_loop().await?;
 
     Ok(())
 }

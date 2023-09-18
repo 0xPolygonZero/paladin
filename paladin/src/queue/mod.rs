@@ -52,9 +52,6 @@ pub trait QueueHandle: Clone + Send + Sync + Unpin + 'static {
 
     /// Declare a queue consumer.
     async fn declare_consumer(&self, consumer_name: &str) -> Result<Self::Consumer>;
-
-    /// Delete the queue.
-    async fn delete(self) -> Result<()>;
 }
 
 /// A queue consumer instance.
@@ -73,4 +70,5 @@ pub trait Consumer: Clone + Send + Sync + Unpin + 'static {
 }
 
 pub mod amqp;
+pub mod in_memory;
 pub mod sink;

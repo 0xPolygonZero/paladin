@@ -31,6 +31,7 @@
 //! let deserialized: MyData = Serializer::Cbor.from_bytes(&serialized).unwrap();
 //! ```
 
+use crate::config::{self, Config};
 use anyhow::Result;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tracing::instrument;
@@ -83,6 +84,14 @@ impl Serializer {
     pub fn from_bytes<T: for<'a> Deserialize<'a>>(&self, bytes: &[u8]) -> Result<T> {
         match self {
             Self::Cbor => Ok(ciborium::from_reader(bytes)?),
+        }
+    }
+}
+
+impl From<&Config> for Serializer {
+    fn from(config: &Config) -> Self {
+        match config.serializer {
+            config::Serializer::Cbor => Self::Cbor,
         }
     }
 }

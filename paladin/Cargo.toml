@@ -8,12 +8,13 @@ authors = ["Zach Brown <zbrown@polygon.technology>"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "1.0.75"
+anyhow = { version = "1.0.75", features = ["backtrace"] }
 dotenvy = "0.15.7"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 lapin = "2.3.1"
 tokio = { version = "1.32.0", features = ["full"] }
+tokio-util = "0.7.8"
 tokio-executor-trait = "2.1.1"
 tokio-reactor-trait = "1.1.0"
 serde = "1.0.183"

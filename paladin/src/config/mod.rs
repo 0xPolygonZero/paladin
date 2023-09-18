@@ -12,7 +12,8 @@
 //! # Usage:
 //! Both the orchestrator and worker binaries require these configurations since
 //! they both utilize the same [`Runtime`](crate::runtime::Runtime).
-//! The [`Config`] struct can be passed to [`get_runtime`](crate::get_runtime)
+//! The [`Config`] struct can be passed to
+//! [`Runtime::from_config`](crate::runtime::Runtime::from_config)
 //! to dynamically construct a [`Runtime`](crate::runtime::Runtime) based on the
 //! provided configuration.
 
@@ -31,7 +32,7 @@ pub struct Config {
     pub serializer: Serializer,
 
     /// Specifies the runtime environment to use.
-    #[arg(long, short, value_enum, default_value_t = Runtime::AMQP)]
+    #[arg(long, short, value_enum, default_value_t = Runtime::Amqp)]
     pub runtime: Runtime,
 
     /// Provides the URI for the AMQP broker, if the AMQP runtime is selected.
@@ -50,5 +51,6 @@ pub enum Serializer {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, ValueEnum, Default)]
 pub enum Runtime {
     #[default]
-    AMQP,
+    Amqp,
+    InMemory,
 }
