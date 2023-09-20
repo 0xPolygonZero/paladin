@@ -3,15 +3,17 @@
 //! The [`CoordinatedSink`] wraps a [`Sink`] and does the following:
 //! - Keeps track of the number of pending sends.
 //! - Closes the channel when dropped or explicitly closed.
-use super::ChannelState;
-use anyhow::{anyhow, bail};
-use futures::{ready, Sink};
-use pin_project::{pin_project, pinned_drop};
 use std::{
     pin::Pin,
     sync::{atomic::Ordering, Arc},
     task::{Context, Poll},
 };
+
+use anyhow::{anyhow, bail};
+use futures::{ready, Sink};
+use pin_project::{pin_project, pinned_drop};
+
+use super::ChannelState;
 
 /// The [`Sink`] end of a coordinated channel.
 ///

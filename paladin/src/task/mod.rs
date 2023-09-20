@@ -3,15 +3,17 @@
 //! Tasks encode an [`Operation`] paired with arguments and additional metadata.
 //! They represent the payloads used to communicate between
 //! [`Runtime`](crate::runtime::Runtime)s and [`WorkerRuntime`]s.
+use std::fmt::Debug;
+
+use anyhow::Result;
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+
 use crate::{
     operation::{OpKind, Operation},
     runtime::WorkerRuntime,
     serializer::{Serializable, Serializer},
 };
-use anyhow::Result;
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use std::fmt::Debug;
 
 /// A [`Task`] encodes an [`Operation`] paired with arguments.
 ///

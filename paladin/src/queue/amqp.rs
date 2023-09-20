@@ -45,17 +45,19 @@
 //!     Ok(())
 //! }
 //! ```
+use std::pin::Pin;
+
+use anyhow::Result;
+use async_trait::async_trait;
+use futures::{Stream, StreamExt, TryStreamExt};
+use lapin::options::QueueDeleteOptions;
+use tracing::{error, instrument};
+
 use super::{Connection, Consumer, Queue, QueueHandle};
 use crate::{
     acker::Acker,
     serializer::{Serializable, Serializer},
 };
-use anyhow::Result;
-use async_trait::async_trait;
-use futures::{Stream, StreamExt, TryStreamExt};
-use lapin::options::QueueDeleteOptions;
-use std::pin::Pin;
-use tracing::{error, instrument};
 
 /// A [`Queue`] implementation for AMQP.
 ///

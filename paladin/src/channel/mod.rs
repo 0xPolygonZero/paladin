@@ -11,16 +11,18 @@
 //! communication. This avoids instantiating unnecessary resources when only one
 //! is needed.
 
-use crate::{acker::Acker, serializer::Serializable};
-use anyhow::Result;
-use async_trait::async_trait;
-use futures::{Sink, Stream};
-use pin_project::{pin_project, pinned_drop};
 use std::{
     pin::Pin,
     task::{Context, Poll},
 };
+
+use anyhow::Result;
+use async_trait::async_trait;
+use futures::{Sink, Stream};
+use pin_project::{pin_project, pinned_drop};
 use tracing::error;
+
+use crate::{acker::Acker, serializer::Serializable};
 
 trait Sender {
     fn close(&mut self) -> Result<()>;

@@ -1,5 +1,14 @@
 //! [`Fold`] implementation for [`Runtime`].
 
+use std::{ops::RangeInclusive, sync::Arc};
+
+use anyhow::Result;
+use async_trait::async_trait;
+use futures::{Sink, SinkExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
+use serde::{Deserialize, Serialize};
+use tokio::sync::{Mutex, Notify, RwLock};
+use tracing::{error, instrument};
+
 use crate::{
     contiguous::{Contiguous, ContiguousQueue},
     directive::{Directive, Evaluator, Fold},
@@ -7,13 +16,6 @@ use crate::{
     runtime::Runtime,
     task::{AnyTask, RemoteExecute, Task, TaskResult},
 };
-use anyhow::Result;
-use async_trait::async_trait;
-use futures::{Sink, SinkExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
-use serde::{Deserialize, Serialize};
-use std::{ops::RangeInclusive, sync::Arc};
-use tokio::sync::{Mutex, Notify, RwLock};
-use tracing::{error, instrument};
 
 /// Metadata for a [`Fold`] [`Task`].
 ///

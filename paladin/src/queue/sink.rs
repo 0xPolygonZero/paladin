@@ -49,15 +49,17 @@
 //! - The `start_send` method spawns a new task for each item, ensuring
 //!   asynchronous processing.
 
-use crate::{queue::QueueHandle, serializer::Serializable};
-use anyhow::Result;
-use futures::{ready, FutureExt, Sink};
 use std::{
     collections::VecDeque,
     pin::Pin,
     task::{Context, Poll},
 };
+
+use anyhow::Result;
+use futures::{ready, FutureExt, Sink};
 use tokio::task::JoinHandle;
+
+use crate::{queue::QueueHandle, serializer::Serializable};
 
 /// A generic [`Sink`] implementation for [`QueueHandle`].
 /// Abstracts away a Queue dependency from the caller such they may simply

@@ -1,15 +1,16 @@
 //! [`Apply`] implementation for [`Runtime`].
 
+use anyhow::{anyhow, Result};
+use async_trait::async_trait;
+use futures::{SinkExt, StreamExt};
+use tracing::{error, instrument};
+
 use crate::{
     directive::{Apply, Directive, Evaluator},
     operation::{OpKind, Operation},
     runtime::Runtime,
     task::{AnyTask, RemoteExecute, Task},
 };
-use anyhow::{anyhow, Result};
-use async_trait::async_trait;
-use futures::{SinkExt, StreamExt};
-use tracing::{error, instrument};
 
 #[async_trait]
 impl<'a, Kind: OpKind, Op: Operation<Kind = Kind>, Input: Directive<Output = Op::Input> + 'a>

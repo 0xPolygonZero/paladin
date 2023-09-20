@@ -90,14 +90,15 @@
 //!     Ok(())
 //! }
 
+use anyhow::Result;
+use async_trait::async_trait;
+use uuid::Uuid;
+
 use crate::{
     channel::{Channel, ChannelFactory},
     queue::{sink::QueueSink, Connection, Consumer, QueueHandle},
     serializer::Serializable,
 };
-use anyhow::Result;
-use async_trait::async_trait;
-use uuid::Uuid;
 
 /// A [`ChannelFactory`] implementation for a queue.
 #[derive(Clone)]

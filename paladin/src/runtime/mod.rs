@@ -47,6 +47,11 @@
 //! [`Task`]s and [`Directive`](crate::directive::Directive)s use to
 //! communicate, and provides a simple interface for interacting with these
 //! channels.
+use anyhow::Result;
+use futures::{Sink, SinkExt, Stream, StreamExt};
+use tokio::{task::JoinHandle, try_join};
+use tracing::{debug_span, error, instrument, Instrument};
+
 use self::dynamic_channel::{DynamicChannel, DynamicChannelFactory};
 use crate::{
     acker::{Acker, ComposedAcker},
@@ -56,10 +61,6 @@ use crate::{
     serializer::{Serializable, Serializer},
     task::{AnyTask, AnyTaskResult, RemoteExecute, Task, TaskResult},
 };
-use anyhow::Result;
-use futures::{Sink, SinkExt, Stream, StreamExt};
-use tokio::{task::JoinHandle, try_join};
-use tracing::{debug_span, error, instrument, Instrument};
 
 type Receiver<Item> = Box<dyn Stream<Item = (Item, Box<dyn Acker>)> + Send + Sync + Unpin>;
 type Sender<Item> = Box<dyn Sink<Item, Error = anyhow::Error> + Send + Sync + Unpin>;

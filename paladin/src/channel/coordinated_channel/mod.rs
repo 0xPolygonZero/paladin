@@ -12,12 +12,14 @@
 //! problems by binding the sender and receiver to a shared state that tracks
 //! sender closure and pending sends.
 
-use self::{coordinated_sink::CoordinatedSink, coordinated_stream::CoordinatedStream};
-use futures::{Sink, Stream};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
 };
+
+use futures::{Sink, Stream};
+
+use self::{coordinated_sink::CoordinatedSink, coordinated_stream::CoordinatedStream};
 
 pub mod coordinated_sink;
 pub mod coordinated_stream;

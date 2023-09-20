@@ -215,9 +215,11 @@
 //! }
 //! ```
 
-use crate::serializer::Serializable;
-use anyhow::Result;
 use std::fmt::Debug;
+
+use anyhow::Result;
+
+use crate::serializer::Serializable;
 
 /// An operation that can be performed by a worker.
 ///

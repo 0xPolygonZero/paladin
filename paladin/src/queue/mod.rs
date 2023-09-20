@@ -7,10 +7,11 @@
 //! queue declaration, queue consumption, and message publishing are the only
 //! operations that are supported.
 
-use crate::{acker::Acker, serializer::Serializable};
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::Stream;
+
+use crate::{acker::Acker, serializer::Serializable};
 
 #[async_trait]
 pub trait Queue {

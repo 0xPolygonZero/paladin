@@ -16,8 +16,6 @@
 //! - Decrements the number of pending sends when an item is yielded and it is
 //!   acknowledged.
 
-use futures::Stream;
-use pin_project::pin_project;
 use std::{
     pin::Pin,
     sync::{
@@ -26,6 +24,9 @@ use std::{
     },
     task::{Context, Poll, Waker},
 };
+
+use futures::Stream;
+use pin_project::pin_project;
 
 use super::ChannelState;
 

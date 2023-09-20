@@ -10,6 +10,10 @@
 //! the available implementations, which dynamically delegate to the appropriate
 //! implementation.
 
+use anyhow::Result;
+use async_trait::async_trait;
+use futures::{Sink, Stream, StreamExt};
+
 use crate::{
     acker::Acker,
     channel::{
@@ -24,9 +28,6 @@ use crate::{
     },
     serializer::{Serializable, Serializer},
 };
-use anyhow::Result;
-use async_trait::async_trait;
-use futures::{Sink, Stream, StreamExt};
 
 /// A [`Channel`] implementation that dynamically delegates to the given
 /// implementation.

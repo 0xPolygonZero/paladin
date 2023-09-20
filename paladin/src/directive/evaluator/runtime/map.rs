@@ -1,16 +1,17 @@
 //! [`Map`] implementation for [`Runtime`].
 
+use anyhow::Result;
+use async_trait::async_trait;
+use futures::{SinkExt, Stream, StreamExt};
+use serde::{Deserialize, Serialize};
+use tracing::{error, instrument};
+
 use crate::{
     directive::{Directive, Evaluator, Map},
     operation::{OpKind, Operation},
     runtime::Runtime,
     task::{AnyTask, RemoteExecute, Task},
 };
-use anyhow::Result;
-use async_trait::async_trait;
-use futures::{SinkExt, Stream, StreamExt};
-use serde::{Deserialize, Serialize};
-use tracing::{error, instrument};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Metadata {

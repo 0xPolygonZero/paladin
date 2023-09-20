@@ -9,25 +9,27 @@
 //! The [`InMemoryConnection`] is cloneable can be used to simulate a connection
 //! pool to a real queue. Each clone of the connection will maintain references
 //! to same underlying queues.
-use super::{Connection, Consumer, Queue, QueueHandle};
-use crate::{
-    acker::NoopAcker,
-    serializer::{Serializable, Serializer},
-};
-use anyhow::Result;
-use async_trait::async_trait;
-use futures::{
-    lock::{Mutex, OwnedMutexLockFuture},
-    ready, Future, Stream,
-};
 use std::{
     collections::{HashMap, VecDeque},
     pin::{pin, Pin},
     sync::Arc,
     task::{Context, Poll},
 };
+
+use anyhow::Result;
+use async_trait::async_trait;
+use futures::{
+    lock::{Mutex, OwnedMutexLockFuture},
+    ready, Future, Stream,
+};
 use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
 use tokio_util::sync::PollSemaphore;
+
+use super::{Connection, Consumer, Queue, QueueHandle};
+use crate::{
+    acker::NoopAcker,
+    serializer::{Serializable, Serializer},
+};
 
 /// An in-memory implementation of [`Queue`].
 ///

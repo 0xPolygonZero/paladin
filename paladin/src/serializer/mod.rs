@@ -31,10 +31,11 @@
 //! let deserialized: MyData = Serializer::Cbor.from_bytes(&serialized).unwrap();
 //! ```
 
-use crate::config::{self, Config};
 use anyhow::Result;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tracing::instrument;
+
+use crate::config::{self, Config};
 
 /// Represents a shorthand for common serialization and deserialization
 /// behaviors.

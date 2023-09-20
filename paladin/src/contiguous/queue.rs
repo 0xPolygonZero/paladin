@@ -1,5 +1,6 @@
-use super::Contiguous;
 use std::collections::BTreeMap;
+
+use super::Contiguous;
 
 /// Utility for queueing and assembling values in a monoidal fashion.
 ///
@@ -103,8 +104,9 @@ impl<T: Contiguous, Iter: IntoIterator<Item = T>> From<Iter> for ContiguousQueue
 
 #[cfg(test)]
 mod test {
-    use super::{Contiguous, ContiguousQueue};
     use std::ops::RangeInclusive;
+
+    use super::{Contiguous, ContiguousQueue};
 
     #[derive(Clone, PartialEq, Eq, Debug)]
     struct TestValue {
