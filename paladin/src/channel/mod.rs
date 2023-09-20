@@ -15,7 +15,11 @@ use crate::{acker::Acker, serializer::Serializable};
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::{Sink, Stream};
-use std::pin::Pin;
+use pin_project::{pin_project, pinned_drop};
+use std::{
+    pin::Pin,
+    task::{Context, Poll},
+};
 use tracing::error;
 
 trait Sender {
@@ -73,25 +77,24 @@ pub trait ChannelFactory: Send + Sync {
 ///
 /// [`LeaseGuard`] implements [`Stream`] where the pipe is a [`Stream`], and can
 /// be used as a [`Stream`] directly.
+#[pin_project(PinnedDrop)]
 pub struct LeaseGuard<C: Channel, Pipe> {
-    pipe: Pin<Box<Pipe>>,
-    channel: Option<Pin<Box<C>>>,
+    #[pin]
+    pipe: Pipe,
+    channel: Option<C>,
 }
 
 /// Implement [`Stream`] for [`LeaseGuard`] where the pipe is a [`Stream`].
 impl<C: Channel, Pipe: Stream> Stream for LeaseGuard<C, Pipe> {
     type Item = Pipe::Item;
 
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        self.pipe.as_mut().poll_next(cx)
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.project().pipe.poll_next(cx)
     }
 }
 
 impl<C: Channel, Pipe> std::ops::Deref for LeaseGuard<C, Pipe> {
-    type Target = Pin<Box<Pipe>>;
+    type Target = Pipe;
 
     fn deref(&self) -> &Self::Target {
         &self.pipe
@@ -107,15 +110,17 @@ impl<C: Channel, Pipe> std::ops::DerefMut for LeaseGuard<C, Pipe> {
 impl<C: Channel, Pipe> LeaseGuard<C, Pipe> {
     pub fn new(channel: C, pipe: Pipe) -> Self {
         Self {
-            pipe: Box::pin(pipe),
-            channel: Some(Box::pin(channel)),
+            pipe,
+            channel: Some(channel),
         }
     }
 }
 
-impl<C: Channel, Pipe> Drop for LeaseGuard<C, Pipe> {
-    fn drop(&mut self) {
-        if let Some(channel) = self.channel.take() {
+#[pinned_drop]
+impl<C: Channel, Pipe> PinnedDrop for LeaseGuard<C, Pipe> {
+    fn drop(self: Pin<&mut Self>) {
+        let this = self.project();
+        if let Some(channel) = this.channel.take() {
             tokio::spawn(async move {
                 if let Err(e) = channel.release().await {
                     error!("Failed to release channel: {}", e);

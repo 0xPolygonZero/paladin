@@ -22,7 +22,7 @@ use futures::{
 };
 use std::{
     collections::{HashMap, VecDeque},
-    pin::Pin,
+    pin::{pin, Pin},
     sync::Arc,
     task::{Context, Poll},
 };
@@ -300,13 +300,13 @@ pub struct ConsumerStream<T: Serializable> {
 impl<T: Serializable> Stream for ConsumerStream<T> {
     type Item = (T, NoopAcker);
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.get_mut();
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let mut this = self.as_mut();
 
         // If we have a lock future, poll it
         match this.lock_fut.take() {
             Some((mut fut, permit)) => {
-                match Pin::new(&mut fut).poll(cx) {
+                match pin!(&mut fut).poll(cx) {
                     Poll::Ready(mut lock) => {
                         // We have a lock, pop the message
                         let item = lock.pop_front();
@@ -348,7 +348,7 @@ impl<T: Serializable> Stream for ConsumerStream<T> {
                     Some(permit) => {
                         // Create a lock future and poll ourselves
                         this.lock_fut = Some((this.messages.clone().lock_owned(), permit));
-                        Pin::new(this).poll_next(cx)
+                        self.poll_next(cx)
                     }
                     None => Poll::Pending,
                 }

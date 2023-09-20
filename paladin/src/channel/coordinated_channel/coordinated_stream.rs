@@ -17,7 +17,7 @@
 //!   acknowledged.
 
 use futures::Stream;
-
+use pin_project::pin_project;
 use std::{
     pin::Pin,
     sync::{
@@ -46,17 +46,16 @@ use super::ChannelState;
 ///   there are no unacknowledged sends.
 /// - Decrements the number of pending sends when an item is yielded and it is
 ///   acknowledged.
+#[pin_project]
 pub struct CoordinatedStream<S: Stream> {
-    inner: Pin<Box<S>>,
+    #[pin]
+    inner: S,
     state: Arc<ChannelState>,
 }
 
 impl<S: Stream> CoordinatedStream<S> {
     pub fn new(inner: S, state: Arc<ChannelState>) -> Self {
-        Self {
-            inner: Box::pin(inner),
-            state,
-        }
+        Self { inner, state }
     }
 }
 
@@ -101,21 +100,22 @@ impl CoordinatedAcker {
 impl<S: Stream> Stream for CoordinatedStream<S> {
     type Item = (S::Item, CoordinatedAcker);
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let item = Pin::new(&mut self.inner).poll_next(cx);
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.project();
+        let item = this.inner.poll_next(cx);
 
         match item {
             // If the inner stream has an item available, return it with an acker.
             Poll::Ready(Some(item)) => Poll::Ready(Some((
                 item,
-                CoordinatedAcker::new(self.state.clone(), cx.waker().clone()),
+                CoordinatedAcker::new(this.state.clone(), cx.waker().clone()),
             ))),
             Poll::Pending => {
                 // If the inner stream is pending, check that the channel is closed and there
                 // are no pending sends. If so, return `None` to signal that the
                 // stream has terminated.
-                let num_pending_sends = self.state.num_pending_sends.load(Ordering::SeqCst);
-                if self.state.closed.load(Ordering::SeqCst) && num_pending_sends == 0 {
+                let num_pending_sends = this.state.num_pending_sends.load(Ordering::SeqCst);
+                if this.state.closed.load(Ordering::SeqCst) && num_pending_sends == 0 {
                     return Poll::Ready(None);
                 }
 
@@ -127,7 +127,7 @@ impl<S: Stream> Stream for CoordinatedStream<S> {
             // inner stream is closed and there are no pending sends. Otherwise, return
             // pending as there are pending sends.
             Poll::Ready(None) => {
-                if self.state.num_pending_sends.load(Ordering::SeqCst) == 0 {
+                if this.state.num_pending_sends.load(Ordering::SeqCst) == 0 {
                     Poll::Ready(None)
                 } else {
                     Poll::Pending

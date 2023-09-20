@@ -3,15 +3,15 @@
 //! The [`CoordinatedSink`] wraps a [`Sink`] and does the following:
 //! - Keeps track of the number of pending sends.
 //! - Closes the channel when dropped or explicitly closed.
+use super::ChannelState;
 use anyhow::{anyhow, bail};
 use futures::{ready, Sink};
+use pin_project::{pin_project, pinned_drop};
 use std::{
     pin::Pin,
     sync::{atomic::Ordering, Arc},
     task::{Context, Poll},
 };
-
-use super::ChannelState;
 
 /// The [`Sink`] end of a coordinated channel.
 ///
@@ -19,9 +19,11 @@ use super::ChannelState;
 /// [`Sink`]:
 /// - Keeps track of the number of pending sends.
 /// - Closes the channel when dropped or explicitly closed.
+#[pin_project(PinnedDrop)]
 #[derive(Clone)]
 pub struct CoordinatedSink<T: Unpin, Inner: Sink<T, Error = anyhow::Error>> {
-    inner: Pin<Box<Inner>>,
+    #[pin]
+    inner: Inner,
     state: Arc<ChannelState>,
     _marker: std::marker::PhantomData<T>,
 }
@@ -29,15 +31,16 @@ pub struct CoordinatedSink<T: Unpin, Inner: Sink<T, Error = anyhow::Error>> {
 impl<T: Unpin, Inner: Sink<T, Error = anyhow::Error>> CoordinatedSink<T, Inner> {
     pub fn new(inner: Inner, state: Arc<ChannelState>) -> Self {
         Self {
-            inner: Box::pin(inner),
+            inner,
             state,
             _marker: std::marker::PhantomData,
         }
     }
 }
 
-impl<T: Unpin, Inner: Sink<T, Error = anyhow::Error>> Drop for CoordinatedSink<T, Inner> {
-    fn drop(&mut self) {
+#[pinned_drop]
+impl<T: Unpin, Inner: Sink<T, Error = anyhow::Error>> PinnedDrop for CoordinatedSink<T, Inner> {
+    fn drop(self: Pin<&mut Self>) {
         self.state.close();
     }
 }
@@ -67,26 +70,24 @@ impl<T: Unpin, Inner: Sink<T, Error = anyhow::Error>> Sink<T> for CoordinatedSin
     type Error = anyhow::Error;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let this = self.get_mut();
+        let this = self.project();
         if this.state.closed.load(Ordering::SeqCst) {
             return Poll::Ready(err_closed());
         }
 
         this.inner
-            .as_mut()
             .poll_ready(cx)
             .map_err(|e| anyhow!(CoordinatedSinkError::Inner(e)))
     }
 
     fn start_send(self: Pin<&mut Self>, item: T) -> Result<(), Self::Error> {
-        let this = self.get_mut();
+        let this = self.project();
         if this.state.closed.load(Ordering::SeqCst) {
             return err_closed();
         }
 
         let send = this
             .inner
-            .as_mut()
             .start_send(item)
             .map_err(|e| anyhow!(CoordinatedSinkError::Inner(e)));
 
@@ -98,20 +99,19 @@ impl<T: Unpin, Inner: Sink<T, Error = anyhow::Error>> Sink<T> for CoordinatedSin
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let this = self.get_mut();
+        let this = self.project();
 
         if this.state.closed.load(Ordering::SeqCst) {
             return Poll::Ready(err_closed());
         }
 
         this.inner
-            .as_mut()
             .poll_flush(cx)
             .map_err(|e| anyhow!(CoordinatedSinkError::Inner(e)))
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let this = self.get_mut();
+        let this = self.project();
 
         if this.state.closed.load(Ordering::SeqCst) {
             return Poll::Ready(Ok(()));
@@ -119,7 +119,6 @@ impl<T: Unpin, Inner: Sink<T, Error = anyhow::Error>> Sink<T> for CoordinatedSin
 
         ready!(this
             .inner
-            .as_mut()
             .poll_close(cx)
             .map_err(|e| anyhow!(CoordinatedSinkError::Inner(e)))?);
         this.state.close();
