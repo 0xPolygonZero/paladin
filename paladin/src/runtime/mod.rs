@@ -137,6 +137,15 @@ where
         })
     }
 
+    /// Short-hand for initializing an in-memory [`Runtime`].
+    pub async fn in_memory() -> Result<Self> {
+        let config = Config {
+            runtime: crate::config::Runtime::InMemory,
+            ..Default::default()
+        };
+        Self::from_config(&config).await
+    }
+
     /// Spawns an emulator for the worker runtime.
     ///
     /// This is used to emulate the worker runtime when running in-memory.

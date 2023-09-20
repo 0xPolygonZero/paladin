@@ -59,7 +59,6 @@ pub trait Directive: Send + Sync {
     /// #    directive::{Directive, Evaluator, indexed},
     /// #    opkind_derive::OpKind,
     /// #    runtime::Runtime,
-    /// #    config::{self, Config}
     /// # };
     /// # use serde::{Deserialize, Serialize};
     /// # use anyhow::Result;
@@ -86,7 +85,7 @@ pub trait Directive: Send + Sync {
     ///
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// # let runtime = Runtime::from_config(&Config { runtime: config::Runtime::InMemory, ..Default::default() }).await?;
+    /// # let runtime = Runtime::in_memory().await?;
     /// let computation = indexed([1, 2, 3, 4, 5]).fold(Multiply);
     /// let result = runtime.evaluate(computation).await?;
     /// assert_eq!(result, 120);
@@ -119,7 +118,6 @@ pub trait Directive: Send + Sync {
     /// #    directive::{Directive, Evaluator, indexed, unindexed},
     /// #    opkind_derive::OpKind,
     /// #    runtime::Runtime,
-    /// #    config::{self, Config}
     /// # };
     /// # use serde::{Deserialize, Serialize};
     /// # use anyhow::Result;
@@ -144,7 +142,7 @@ pub trait Directive: Send + Sync {
     ///
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// # let runtime = Runtime::from_config(&Config { runtime: config::Runtime::InMemory, ..Default::default() }).await?;
+    /// # let runtime = Runtime::in_memory().await?;
     /// let input = ["hel", "lo", " world", "!"].iter().map(|s| s.to_string());
     /// let computation = indexed(input).map(Length);
     /// let result = runtime.evaluate(computation).await?;
@@ -166,7 +164,6 @@ pub trait Directive: Send + Sync {
     /// #    directive::{Directive, Evaluator, indexed, unindexed},
     /// #    opkind_derive::OpKind,
     /// #    runtime::Runtime,
-    /// #    config::{self, Config}
     /// # };
     /// # use serde::{Deserialize, Serialize};
     /// # use anyhow::Result;
@@ -190,7 +187,7 @@ pub trait Directive: Send + Sync {
     ///
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// # let runtime = Runtime::from_config(&Config { runtime: config::Runtime::InMemory, ..Default::default() }).await?;
+    /// # let runtime = Runtime::in_memory().await?;
     /// let computation = indexed([1, 2, 3, 4, 5]).map(MultiplyBy(2));
     /// let result = runtime.evaluate(computation).await?;
     /// // The output is an indexed stream, convert it into a sorted vec
@@ -220,7 +217,6 @@ pub trait Directive: Send + Sync {
     /// #    directive::{Directive, Evaluator, lit},
     /// #    opkind_derive::OpKind,
     /// #    runtime::Runtime,
-    /// #    config::{self, Config}
     /// # };
     /// # use serde::{Deserialize, Serialize};
     /// # use anyhow::Result;
@@ -244,7 +240,7 @@ pub trait Directive: Send + Sync {
     ///
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// # let runtime = Runtime::from_config(&Config { runtime: config::Runtime::InMemory, ..Default::default() }).await?;
+    /// # let runtime = Runtime::in_memory().await?;
     /// let computation = lit(21).apply(MultiplyBy(2));
     /// let result = runtime.evaluate(computation).await?;
     ///
@@ -357,7 +353,6 @@ impl<Op: Operation, Input: Directive<Output = Op::Input>> Directive for Apply<Op
 /// #    directive::{Directive, Evaluator, indexed},
 /// #    opkind_derive::OpKind,
 /// #    runtime::Runtime,
-/// #    config::{self, Config}
 /// # };
 /// # use serde::{Deserialize, Serialize};
 /// # use anyhow::Result;
@@ -384,7 +379,7 @@ impl<Op: Operation, Input: Directive<Output = Op::Input>> Directive for Apply<Op
 ///
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
-/// # let runtime = Runtime::from_config(&Config { runtime: config::Runtime::InMemory, ..Default::default() }).await?;
+/// # let runtime = Runtime::in_memory().await?;
 /// let computation = indexed([1, 2, 3, 4, 5]).fold(Multiply);
 /// let result = runtime.evaluate(computation).await?;
 /// assert_eq!(result, 120);
