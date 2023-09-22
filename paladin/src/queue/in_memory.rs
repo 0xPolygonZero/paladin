@@ -22,7 +22,7 @@ use futures::{
     lock::{Mutex, OwnedMutexLockFuture},
     ready, Future, Stream,
 };
-use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::PollSemaphore;
 
 use super::{Connection, Consumer, Queue, QueueHandle};
@@ -100,7 +100,7 @@ pub struct InMemoryConnection {
     /// and stored in an atomically reference counted pointer to allow for
     /// multiple clones of the connection to maintain references to the same
     /// queues.
-    queues: Arc<RwLock<HashMap<String, InMemoryQueueHandle>>>,
+    queues: Arc<Mutex<HashMap<String, InMemoryQueueHandle>>>,
     /// The serializer to use for serializing and deserializing messages.
     serializer: Serializer,
 }
@@ -119,25 +119,21 @@ impl Connection for InMemoryConnection {
     type QueueHandle = InMemoryQueueHandle;
 
     async fn declare_queue(&self, name: &str) -> Result<Self::QueueHandle> {
-        let read_lock = self.queues.read().await;
-        match read_lock.get(name) {
+        let mut lock = self.queues.lock().await;
+        match lock.get(name) {
             Some(queue) => Ok(queue.clone()),
             None => {
-                drop(read_lock);
-                let mut write_lock = self.queues.write().await;
                 let queue = InMemoryQueueHandle::new(self.serializer);
-                write_lock.insert(name.to_string(), queue.clone());
+                lock.insert(name.to_string(), queue.clone());
                 Ok(queue)
             }
         }
     }
 
     async fn delete_queue(&self, name: &str) -> Result<()> {
-        let read_lock = self.queues.read().await;
-        if read_lock.get(name).is_some() {
-            drop(read_lock);
-            let mut write_lock = self.queues.write().await;
-            write_lock.remove(name);
+        let mut lock = self.queues.lock().await;
+        if lock.get(name).is_some() {
+            lock.remove(name);
         }
         Ok(())
     }
