@@ -101,20 +101,19 @@ type CoordinatedTaskChannel<Op, Metadata> = (
 ///
 /// See the [runtime module documentation](crate::runtime) for more information
 /// on runtime semantics.
-pub struct Runtime<Kind: OpKind> {
+pub struct Runtime {
     channel_factory: DynamicChannelFactory,
     task_channel: DynamicChannel,
     serializer: Serializer,
     worker_emulator: Option<Vec<JoinHandle<Result<()>>>>,
-    _kind: std::marker::PhantomData<Kind>,
 }
 
-impl<Kind: OpKind> Runtime<Kind>
-where
-    AnyTask<Kind>: RemoteExecute<Kind>,
-{
+impl Runtime {
     /// Initializes the [`Runtime`] with the provided [`Config`].
-    pub async fn from_config(config: &Config) -> Result<Self> {
+    pub async fn from_config<K: OpKind>(config: &Config) -> Result<Self>
+    where
+        AnyTask<K>: RemoteExecute<K>,
+    {
         let channel_factory = DynamicChannelFactory::from_config(config).await?;
         let task_channel = channel_factory.get(&config.task_bus_routing_key).await?;
         let serializer = Serializer::from(config);
@@ -134,33 +133,38 @@ where
             task_channel,
             serializer,
             worker_emulator,
-            _kind: std::marker::PhantomData,
         })
     }
 
     /// Short-hand for initializing an in-memory [`Runtime`].
-    pub async fn in_memory() -> Result<Self> {
+    pub async fn in_memory<K: OpKind>() -> Result<Self>
+    where
+        AnyTask<K>: RemoteExecute<K>,
+    {
         let config = Config {
             runtime: crate::config::Runtime::InMemory,
             ..Default::default()
         };
-        Self::from_config(&config).await
+        Self::from_config::<K>(&config).await
     }
 
     /// Spawns an emulator for the worker runtime.
     ///
     /// This is used to emulate the worker runtime when running in-memory.
-    fn spawn_emulator(
+    fn spawn_emulator<K: OpKind>(
         channel_factory: DynamicChannelFactory,
         task_channel: DynamicChannel,
         num_threads: Option<usize>,
-    ) -> Vec<JoinHandle<Result<()>>> {
+    ) -> Vec<JoinHandle<Result<()>>>
+    where
+        AnyTask<K>: RemoteExecute<K>,
+    {
         (0..(num_threads.unwrap_or(10)))
             .map(|_| {
                 let channel_factory = channel_factory.clone();
                 let task_channel = task_channel.clone();
                 tokio::spawn(async move {
-                    let worker_runtime: WorkerRuntime<Kind> = WorkerRuntime {
+                    let worker_runtime: WorkerRuntime<K> = WorkerRuntime {
                         channel_factory,
                         task_channel,
                         _kind: std::marker::PhantomData,
@@ -190,11 +194,11 @@ where
     /// [`Directive`](crate::directive::Directive) needs to coordinate the
     /// results of multiple [`Task`]s.
     #[instrument(skip_all, level = "debug")]
-    async fn get_task_sender<Op: Operation<Kind = Kind>, Metadata: Serializable>(
+    async fn get_task_sender<Op: Operation, Metadata: Serializable>(
         &self,
     ) -> Result<Sender<Task<Op, Metadata>>> {
         // Get a sink for the task channel, which accepts `AnyTask`.
-        let sink = self.task_channel.sender::<AnyTask<Kind>>().await?;
+        let sink = self.task_channel.sender::<AnyTask<Op::Kind>>().await?;
         let serializer = self.serializer;
         // Transform the sink to accept typed `Task`s by serializing them into
         // `AnyTask`s on behalf of the caller. This allows the caller to pass in
@@ -262,7 +266,7 @@ where
     /// #    }
     /// # }
     ///
-    /// async fn run_task<Op: Operation<Kind = MyOps>>(op: Op, runtime: Runtime<MyOps>, input: Op::Input) -> Result<()> {
+    /// async fn run_task<Op: Operation>(op: Op, runtime: Runtime, input: Op::Input) -> Result<()> {
     ///     let (identifier, mut sender, mut receiver) = runtime.lease_coordinated_task_channel::<Op, Metadata>().await?;
     ///
     ///     // Issue a task with the identifier of the receiver
@@ -292,10 +296,7 @@ where
     /// [`Directive`](crate::directive::Directive) needs to coordinate the
     /// results of multiple [`Task`]s.
     #[instrument(skip_all, level = "debug")]
-    pub async fn lease_coordinated_task_channel<
-        Op: Operation<Kind = Kind>,
-        Metadata: Serializable,
-    >(
+    pub async fn lease_coordinated_task_channel<Op: Operation, Metadata: Serializable>(
         &self,
     ) -> Result<CoordinatedTaskChannel<Op, Metadata>> {
         // Issue a new channel and return its identifier paired with a stream of
@@ -352,7 +353,7 @@ where
 }
 
 /// Drop the worker emulator when the runtime is dropped.
-impl<Kind: OpKind> Drop for Runtime<Kind> {
+impl Drop for Runtime {
     fn drop(&mut self) {
         if let Some(worker_emulator) = self.worker_emulator.take() {
             for handle in worker_emulator {

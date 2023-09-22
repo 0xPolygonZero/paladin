@@ -207,11 +207,12 @@
 //! # }
 //! #
 //! use paladin::{
-//!     directive::{indexed, Directive},
+//!     directive::{IndexedStream, Directive},
 //! };
 //!
 //! fn main () {
-//!     let expr = indexed([1, 2, 3, 4, 5, 6]).fold(GenericMultiplication::<i32>::default());
+//!     let computation = IndexedStream::from([1, 2, 3, 4, 5, 6])
+//!         .fold(GenericMultiplication::<i32>::default());
 //! }
 //! ```
 

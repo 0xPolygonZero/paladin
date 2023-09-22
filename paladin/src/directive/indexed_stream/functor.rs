@@ -1,51 +1,39 @@
-//! [`Map`] implementation for [`Runtime`].
-
 use anyhow::Result;
 use async_trait::async_trait;
-use futures::{SinkExt, Stream, StreamExt};
+use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use tracing::{error, instrument};
+use tracing::error;
 
-use crate::{
-    directive::{Directive, Evaluator, Map},
-    operation::{OpKind, Operation},
-    runtime::Runtime,
-    task::{AnyTask, RemoteExecute, Task},
-};
+use super::IndexedStream;
+use crate::{directive::Functor, operation::Operation, runtime::Runtime, task::Task};
 
+/// Metadata for the [`IndexedStream`] functor.
+///
+/// In our functor implementation, we're simply mapping over the input stream,
+/// and given that tasks will be completed in an arbitrary order, we associate
+/// each task with its original input, which will be passed through in the
+/// output stream, preserving the original ordering.
 #[derive(Serialize, Deserialize, Debug)]
 struct Metadata {
     idx: usize,
 }
 
 #[async_trait]
-impl<
-        'a,
-        Kind: OpKind,
-        Op: Operation<Kind = Kind>,
-        InputStream: Stream<Item = (usize, Op::Input)> + 'a + Send + Unpin,
-        Input: Directive<Output = InputStream> + 'a,
-    > Evaluator<'a, Map<Op, InputStream, Input>> for Runtime<Kind>
-where
-    Runtime<Kind>: Evaluator<'a, Input>,
-    AnyTask<Kind>: RemoteExecute<Kind>,
-{
-    #[instrument(skip_all, fields(directive = "Map", op = ?map.op), level = "debug")]
-    async fn evaluate(
-        &'a self,
-        map: Map<Op, InputStream, Input>,
-    ) -> Result<Box<dyn Stream<Item = (usize, Op::Output)> + Send + Unpin>> {
-        let input = self.evaluate(map.input).await?;
-
-        let (channel_identifier, mut sender, receiver) = self
+impl<A: Send, B: Send + 'static> Functor<B> for IndexedStream<A> {
+    async fn f_map<Op: Operation<Input = A, Output = B>>(
+        self,
+        op: Op,
+        runtime: &Runtime,
+    ) -> Result<Self::Target> {
+        let (channel_identifier, mut sender, receiver) = runtime
             .lease_coordinated_task_channel::<Op, Metadata>()
             .await?;
 
-        let mut task_stream = input
+        let mut task_stream = self
             .map(|(idx, input)| Task {
                 routing_key: channel_identifier.clone(),
                 metadata: Metadata { idx },
-                op: map.op.clone(),
+                op: op.clone(),
                 input,
             })
             .map(Ok);
@@ -71,6 +59,6 @@ where
             })
         });
 
-        Ok(Box::new(results))
+        Ok(IndexedStream::new(results))
     }
 }

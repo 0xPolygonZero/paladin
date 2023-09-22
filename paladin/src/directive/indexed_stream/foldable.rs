@@ -1,20 +1,19 @@
-//! [`Fold`] implementation for [`Runtime`].
-
 use std::{ops::RangeInclusive, sync::Arc};
 
 use anyhow::Result;
 use async_trait::async_trait;
-use futures::{Sink, SinkExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
+use futures::{Sink, SinkExt, StreamExt, TryFutureExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, Notify, RwLock};
-use tracing::{error, instrument};
+use tracing::error;
 
+use super::IndexedStream;
 use crate::{
     contiguous::{Contiguous, ContiguousQueue},
-    directive::{Directive, Evaluator, Fold},
-    operation::{Monoid, OpKind, Operation},
+    directive::Foldable,
+    operation::{Monoid, Operation},
     runtime::Runtime,
-    task::{AnyTask, RemoteExecute, Task, TaskResult},
+    task::{Task, TaskResult},
 };
 
 /// Metadata for a [`Fold`] [`Task`].
@@ -39,7 +38,7 @@ impl<Op: Operation> TaskResult<Op, Metadata> {
     }
 }
 
-/// A [`Contiguous`] [`TaskResult`] for [`Fold`] [`Task`]s.
+/// A [`Contiguous`] [`TaskResult`] for [`Task`]s.
 impl<Op: Operation> Contiguous for TaskResult<Op, Metadata> {
     type Key = usize;
 
@@ -127,25 +126,11 @@ impl<Op: Monoid> Dispatcher<Op> {
 }
 
 #[async_trait]
-impl<
-        'a,
-        Kind: OpKind,
-        Op: Monoid<Kind = Kind>,
-        InputStream: Stream<Item = (usize, Op::Elem)> + 'a + Send + Unpin,
-        Input: Directive<Output = InputStream> + 'a,
-    > Evaluator<'a, Fold<Op, InputStream, Input>> for Runtime<Kind>
-where
-    Runtime<Kind>: Evaluator<'a, Input>,
-    AnyTask<Kind>: RemoteExecute<Kind>,
-{
-    #[instrument(skip_all, fields(directive = "Fold", op = ?fold.op), level = "debug")]
-    async fn evaluate(&'a self, fold: Fold<Op, InputStream, Input>) -> Result<Op::Elem> {
-        let input = self.evaluate(fold.input).await?;
-
-        let (channel_identifier, sender, mut receiver) = self
-            .lease_coordinated_task_channel::<Op, Metadata>()
+impl<A: Send + 'static, B: Send + 'static> Foldable<B> for IndexedStream<A> {
+    async fn f_fold<M: Monoid<Elem = A>>(self, m: M, runtime: &Runtime) -> Result<A> {
+        let (channel_identifier, sender, mut receiver) = runtime
+            .lease_coordinated_task_channel::<M, Metadata>()
             .await?;
-        // Both the initialization step and the result stream need to asynchronous
         // mutable access to the assembler. So we wrap it in an Arc<Mutex<>>.
         let assembler = Arc::new(Mutex::new(ContiguousQueue::new()));
         // Both the initialization step and the result stream need to asynchronous
@@ -179,10 +164,10 @@ where
         // Initialize the assembler, dispatching tasks as contiguous pairs become
         // available. We're doing double duty here, as we also compute the size
         // of the job by tallying the number of inputs.
-        let init = input
+        let init = self
             .map(Ok)
             .try_fold(0, |sum, (idx, item)| {
-                let op = fold.op.clone();
+                let op = m.clone();
                 let dispatcher = dispatcher.clone();
                 let should_dispatch = should_dispatch.clone();
 
@@ -230,7 +215,7 @@ where
         let resolved_size_clone = resolved_input_size.clone();
         let dispatcher_clone = dispatcher.clone();
         let should_dispatch = should_dispatch.clone();
-        let op = fold.op.clone();
+        let op = m.clone();
         let result_handle = tokio::spawn(async move {
             // Wait until at least two inputs have been received.
             should_dispatch.notified().await;
@@ -241,6 +226,7 @@ where
                     // If it is, we can check to see if the result is the final result (i.e., its
                     // range comprises the size of the input).
                     if result.is_final(job_size) {
+                        sender.lock().await.close().await?;
                         return Ok(result.output);
                     }
                 }
@@ -270,7 +256,7 @@ where
                 // Abort the result handle, as it will never receive a result.
                 result_handle.abort();
                 // If the input is empty, we return the empty element.
-                return Ok(fold.op.empty());
+                return Ok(m.empty());
             }
             1 => {
                 // Abort the result handle, as it will never receive a result.
