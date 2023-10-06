@@ -2,7 +2,7 @@
 
 Bringing divine order to distributed computation.
 
-[Read the docs!](https://mir-protocol.github.io/paladin).
+[Read the docs!](https://mir-protocol.github.io/paladin)
 
 
 ## Paladin in 3 sentences
