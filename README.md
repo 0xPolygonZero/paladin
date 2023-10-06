@@ -5,8 +5,9 @@ Bringing divine order to distributed computation.
 [Read the docs!](https://mir-protocol.github.io/paladin)
 
 
-## Paladin in 3 sentences
-Paladin is a distributed computation library for Rust. Paladin simplifies the challenge of distributing computations over a cluster of machines. With a declarative API, it abstracts the complexity and intricacies of writing distributed systems, ensuring developers can express their distributed programs in a clear and concise manner while achieving maximal parallelism.
+## Paladin in 2 sentences
+
+Paladin is a Rust library that aims to simplify writing distributed programs. It provides a declarative API, allowing developers to articulate their distributed programs clearly and concisely, without thinking about the complexities of distributed systems programming.
 
 ## Features
 - **Declarative API**: Express distributed computations with clarity and ease.
