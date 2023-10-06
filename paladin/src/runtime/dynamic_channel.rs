@@ -10,7 +10,7 @@
 //! the available implementations, which dynamically delegate to the appropriate
 //! implementation.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::{Sink, Stream, StreamExt};
 
@@ -122,7 +122,12 @@ impl DynamicChannelFactory {
                     qos: Some(1),
                     serializer,
                 });
-                let channel_factory = QueueChannelFactory::new(queue.get_connection().await?);
+                let channel_factory = QueueChannelFactory::new(
+                    queue
+                        .get_connection()
+                        .await
+                        .context("connecting to AMQP host")?,
+                );
                 Ok(DynamicChannelFactory::Amqp(channel_factory))
             }
             config::Runtime::InMemory => {

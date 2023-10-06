@@ -48,7 +48,10 @@ use pin_project::pin_project;
 /// [`IndexedStream`] implements [`Directive`](crate::directive::Directive),
 /// [`Functor`](crate::directive::Functor), and
 /// [`Foldable`](crate::directive::Foldable), allowing it to be used directly to
-/// form a [`Directive`](crate::directive::Directive) chain.
+/// form a [`Directive`](crate::directive::Directive) chain. Note that because
+/// the stream is indexed, the [`Foldable`](crate::directive::Foldable)
+/// implementation satisfies associativity of combination while folding in
+/// parallel.
 ///
 /// ## Example
 /// ```

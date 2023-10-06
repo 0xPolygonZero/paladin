@@ -312,7 +312,8 @@ impl<Op: Operation, F: Functor<Op::Output, A = Op::Input> + Send, D: Directive<O
 /// [`Monoid`].
 ///
 /// In particular, the provided [`Monoid`] is used to combine the values of the
-/// of the [`Foldable`] until a single value is produced.
+/// of the [`Foldable`] until a single value is produced. [`Foldable`]
+/// implementations should preserve associativity of combination.
 ///
 /// Implementing types must be higher kinded, in that they must be
 /// parameterized by some other type(s).
