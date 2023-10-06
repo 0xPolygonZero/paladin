@@ -41,7 +41,7 @@
 //! [`map`](crate::directive::Directive::map) and
 //! [`fold`](crate::directive::Directive::fold). We recommend using
 //! [`IndexedStream`](crate::directive::indexed_stream::IndexedStream) for all
-//! your programs, as it has been highly optimized for parallelism, all though
+//! your programs, as it has been highly optimized for parallelism, although
 //! of course you are free to define your own.
 //!
 //! ## Defining Operations
