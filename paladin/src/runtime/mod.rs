@@ -489,10 +489,6 @@ where
     /// #   StringLength(StringLength),
     /// }
     ///
-    /// #[derive(Serialize, Deserialize)]
-    /// struct Metadata {
-    ///     id: usize,
-    /// }
     /// # #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
     /// # struct StringLength;
     /// # impl Operation for StringLength {
