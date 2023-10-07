@@ -11,15 +11,15 @@ COPY Cargo.lock .
 
 COPY opkind_derive/Cargo.toml ./opkind_derive/Cargo.toml
 COPY paladin/Cargo.toml ./paladin/Cargo.toml
-COPY ops/Cargo.toml ./ops/Cargo.toml
-COPY worker/Cargo.toml ./worker/Cargo.toml
+COPY examples/hello-world-rabbitmq/ops/Cargo.toml ./ops/Cargo.toml
+COPY examples/hello-world-rabbitmq/worker/Cargo.toml ./worker/Cargo.toml
 
 RUN cargo build --release --bin worker
 
 COPY opkind_derive ./opkind_derive
 COPY paladin ./paladin
-COPY ops ./ops
-COPY worker ./worker
+COPY examples/hello-world-rabbitmq/ops ./ops
+COPY examples/hello-world-rabbitmq/worker ./worker
 RUN \
   touch opkind_derive/src/lib.rs && \
   touch paladin/src/lib.rs && \

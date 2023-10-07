@@ -10,6 +10,5 @@ serde = "1.0.183"
 anyhow = "1.0.75"
 futures = "0.3.28"
 async-trait = "0.1.73"
-num-traits = "0.2.16"
 
-paladin = { path = "../paladin" }
+paladin = { path = "../../../paladin" }

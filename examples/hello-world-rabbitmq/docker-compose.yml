@@ -1,24 +1,24 @@
 version: "3"
 services:
-  orchestrator:
+  leader:
     build:
-      context: .
-      dockerfile: orchestrator.Dockerfile
+      context: ../../
+      dockerfile: examples/hello-world-rabbitmq/leader.Dockerfile
     depends_on:
       rabbitmq:
         condition: service_healthy
     environment:
-      - RUST_LOG=debug
+      - RUST_LOG=info
       - AMQP_URI=amqp://rabbitmq:5672
   worker:
     build:
-      context: .
-      dockerfile: worker.Dockerfile
+      context: ../../
+      dockerfile: examples/hello-world-rabbitmq/worker.Dockerfile
     depends_on:
       rabbitmq:
         condition: service_healthy
     environment:
-      - RUST_LOG=debug
+      - RUST_LOG=info
       - AMQP_URI=amqp://rabbitmq:5672
     deploy:
       mode: replicated

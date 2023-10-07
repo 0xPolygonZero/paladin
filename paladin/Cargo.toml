@@ -23,8 +23,8 @@ ciborium = "0.2.1"
 futures = "0.3.28"
 uuid = { version = "1.4.1", features = ["v4", "fast-rng"] }
 clap = { version = "4.4.2", features = ["derive", "env"] }
-opkind_derive = { path = "../opkind_derive" }
 pin-project = "1.1.3"
+opkind_derive = { path = "../opkind_derive" }
 
 [dev-dependencies]
 # Required for certain doc tests which showcase generic numeric operations
