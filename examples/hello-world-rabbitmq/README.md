@@ -13,6 +13,7 @@ let computation = IndexedStream::from(input)
     .map(CharToString)
     .fold(StringConcat);
 
+let result = computation.run(&runtime).await?;
 assert_eq!(result, "hello world!".to_string());
 ```
 
