@@ -274,4 +274,6 @@ pub mod queue;
 pub mod runtime;
 pub mod serializer;
 pub mod task;
-pub use opkind_derive;
+pub mod opkind_derive {
+    pub use paladin_opkind_derive::*;
+}

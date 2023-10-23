@@ -1,5 +1,5 @@
 [workspace]
-members = ["paladin", "opkind_derive"]
+members = ["paladin", "paladin-opkind-derive"]
 resolver = "2"
 
 [workspace.package]
