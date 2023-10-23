@@ -8,13 +8,5 @@ rust-version = "1.70"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/0xPolygonZero/paladin"
 authors = ["Zach Brown <zbrown@polygon.technology>"]
-keywords = [
-  "distributed",
-  "compute",
-  "cluster",
-  "zk",
-  "mapreduce",
-  "map",
-  "reduce",
-]
+keywords = ["distributed", "compute", "cluster", "zk", "mapreduce"]
 categories = ["concurrency", "asynchronous", "cryptography::cryptocurrencies"]
