@@ -989,7 +989,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "paladin"
+name = "paladin-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1000,7 +1000,7 @@ dependencies = [
  "futures",
  "lapin",
  "num-traits",
- "paladin-opkind-derive",
+ "paladin-opkind-derive 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "pin-project",
  "serde",
  "tokio",
@@ -1015,6 +1015,16 @@ dependencies = [
 [[package]]
 name = "paladin-opkind-derive"
 version = "0.1.0"
+dependencies = [
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "paladin-opkind-derive"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52db5917dc6613839e99f55194fa6049b919906aad4a558076864fb6d524315b"
 dependencies = [
  "quote",
  "syn",
