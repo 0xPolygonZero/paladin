@@ -845,7 +845,7 @@ dependencies = [
  "dotenvy",
  "futures",
  "ops",
- "paladin",
+ "paladin-core",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -972,21 +972,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff011a302c396a5197692431fc1948019154afc178baf7d8e37367442a4601cf"
 
 [[package]]
-name = "opkind_derive"
-version = "0.1.0"
-dependencies = [
- "quote",
- "syn",
-]
-
-[[package]]
 name = "ops"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "futures",
- "paladin",
+ "paladin-core",
  "serde",
 ]
 
@@ -1014,7 +1006,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "paladin"
+name = "paladin-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1024,7 +1016,7 @@ dependencies = [
  "dotenvy",
  "futures",
  "lapin",
- "opkind_derive",
+ "paladin-opkind-derive",
  "pin-project",
  "serde",
  "tokio",
@@ -1034,6 +1026,16 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "paladin-opkind-derive"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52db5917dc6613839e99f55194fa6049b919906aad4a558076864fb6d524315b"
+dependencies = [
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -1969,7 +1971,7 @@ dependencies = [
  "dotenvy",
  "futures",
  "ops",
- "paladin",
+ "paladin-core",
  "tokio",
  "tracing",
  "tracing-subscriber",

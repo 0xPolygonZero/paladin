@@ -14,5 +14,5 @@ tokio = { version = "1.32.0", features = ["full"] }
 futures = "0.3.28"
 clap = { version = "4.4.2", features = ["derive", "env"] }
 
-paladin = { path = "../../../paladin" }
+paladin-core = { path = "../../../paladin-core" }
 ops = { path = "../ops" }
