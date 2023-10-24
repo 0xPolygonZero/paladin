@@ -397,8 +397,9 @@ where
     /// Typically used by a worker node for send back the results of a [`Task`]
     /// execution.
     ///
-    /// The [`opkind_derive::OpKind`] macro uses this internally to provide a
-    /// [`RemoteExecute`] implementation for [`AnyTask`].
+    /// The [`opkind_derive::OpKind`](crate::opkind_derive::OpKind) macro uses
+    /// this internally to provide a [`RemoteExecute`] implementation for
+    /// [`AnyTask`].
     #[instrument(skip(self), level = "debug")]
     pub async fn get_result_sender<Op: Operation>(
         &self,

@@ -363,3 +363,5 @@ impl<M: Monoid, F: Foldable<M::Elem, A = M::Elem> + Send, D: Directive<Output = 
 
 pub mod indexed_stream;
 pub use indexed_stream::IndexedStream;
+pub mod literal;
+pub use literal::Literal;
