@@ -277,3 +277,5 @@ pub mod task;
 pub mod opkind_derive {
     pub use paladin_opkind_derive::*;
 }
+pub use async_trait::async_trait;
+pub use futures;
