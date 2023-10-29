@@ -976,8 +976,6 @@ name = "ops"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-trait",
- "futures",
  "paladin-core",
  "serde",
 ]
@@ -1007,7 +1005,7 @@ dependencies = [
 
 [[package]]
 name = "paladin-core"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1030,9 +1028,9 @@ dependencies = [
 
 [[package]]
 name = "paladin-opkind-derive"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52db5917dc6613839e99f55194fa6049b919906aad4a558076864fb6d524315b"
+checksum = "c5e25b58dbb19317d61c5f812c78908b14eed74c20ca60c12bbd50a1d7f297f5"
 dependencies = [
  "quote",
  "syn",

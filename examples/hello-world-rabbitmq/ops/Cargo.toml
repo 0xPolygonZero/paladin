@@ -8,7 +8,5 @@ edition = "2021"
 [dependencies]
 serde = "1.0.183"
 anyhow = "1.0.75"
-futures = "0.3.28"
-async-trait = "0.1.73"
 
 paladin-core = { path = "../../../paladin-core" }
