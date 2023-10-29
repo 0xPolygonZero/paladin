@@ -114,7 +114,7 @@ pub fn op_kind_derive(input: TokenStream) -> TokenStream {
                         serializer: self.serializer,
                     };
                     let mut sender = runtime.get_result_sender(&self.routing_key).await?;
-                    ::futures::SinkExt::send(&mut sender, response).await?;
+                    ::paladin::futures::SinkExt::send(&mut sender, response).await?;
 
                     Ok(())
                 }
@@ -161,7 +161,7 @@ pub fn op_kind_derive(input: TokenStream) -> TokenStream {
 
         #(#impls)*
 
-        #[::async_trait::async_trait]
+        #[::paladin::async_trait]
         impl ::paladin::task::RemoteExecute<#name> for ::paladin::task::AnyTask<#name> {
             async fn remote_execute(self, runtime: &::paladin::runtime::WorkerRuntime<#name>) -> ::anyhow::Result<()> {
                 match self.op_kind {
