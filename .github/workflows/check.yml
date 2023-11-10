@@ -1,6 +1,10 @@
-on: [push, pull_request]
+on:
+  push:
+    branches:
+      - main
+  pull_request:
 
-name: Clippy
+name: check
 
 jobs:
   clippy:
@@ -22,3 +26,8 @@ jobs:
         with:
           command: clippy
           args: -- -D warnings
+
+      - name: Run cargo test
+        uses: actions-rs/cargo@v1
+        with:
+          command: test

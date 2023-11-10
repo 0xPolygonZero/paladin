@@ -123,7 +123,7 @@ impl Runtime {
             crate::config::Runtime::InMemory => Some(Self::spawn_emulator(
                 channel_factory.clone(),
                 task_channel.clone(),
-                None,
+                config.num_workers.unwrap_or(3),
             )),
             _ => None,
         };
@@ -154,12 +154,12 @@ impl Runtime {
     fn spawn_emulator<K: OpKind>(
         channel_factory: DynamicChannelFactory,
         task_channel: DynamicChannel,
-        num_threads: Option<usize>,
+        num_threads: usize,
     ) -> Vec<JoinHandle<Result<()>>>
     where
         AnyTask<K>: RemoteExecute<K>,
     {
-        (0..(num_threads.unwrap_or(10)))
+        (0..num_threads)
             .map(|_| {
                 let channel_factory = channel_factory.clone();
                 let task_channel = task_channel.clone();
