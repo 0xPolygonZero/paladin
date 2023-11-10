@@ -35,6 +35,11 @@ pub struct Config {
     #[arg(long, short, value_enum, default_value_t = Runtime::Amqp)]
     pub runtime: Runtime,
 
+    /// Specifies the number of worker threads to spawn (in memory runtime
+    /// only).
+    #[arg(long, short)]
+    pub num_workers: Option<usize>,
+
     /// Provides the URI for the AMQP broker, if the AMQP runtime is selected.
     #[arg(long, env = "AMQP_URI", required_if_eq("runtime", "amqp"))]
     pub amqp_uri: Option<String>,
