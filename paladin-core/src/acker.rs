@@ -32,6 +32,11 @@
 //!         // Custom acknowledgement logic here...
 //!         Ok(())
 //!     }
+//!
+//!     async fn nack(&self) -> Result<()> {
+//!         // Custom negative acknowledgement logic here...
+//!         Ok(())
+//!     }
 //! }
 //! ```
 //!
@@ -49,6 +54,11 @@
 //! #        // Custom acknowledgement logic here...
 //! #        Ok(())
 //! #    }
+//! #
+//! #    async fn nack(&self) -> Result<()> {
+//! #        // Custom negative acknowledgement logic here...
+//! #        Ok(())
+//! #    }
 //! # }
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
@@ -57,18 +67,20 @@
 //! # Ok(())
 //! # }
 //! ```
-
 use anyhow::Result;
 use async_trait::async_trait;
+use futures::TryFutureExt;
 
 /// Represents a generic behavior for acknowledging messages.
 ///
 /// This trait provides a unified interface for components that require message
 /// acknowledgement. Implementers of this trait should provide the actual logic
-/// for acknowledging a message in the `ack` method.
+/// for acknowledging a message in the `ack`  and `nack` methods.
 #[async_trait]
 pub trait Acker: Send + Sync + 'static {
     async fn ack(&self) -> Result<()>;
+
+    async fn nack(&self) -> Result<()>;
 }
 
 /// Provides an implementation of the `Acker` trait for boxed types.
@@ -80,29 +92,39 @@ impl<T: Acker + ?Sized> Acker for Box<T> {
     async fn ack(&self) -> Result<()> {
         (**self).ack().await
     }
+
+    async fn nack(&self) -> Result<()> {
+        (**self).nack().await
+    }
 }
 
-/// Provides an implementation of an `Acker` that allows for custom logic to be
-/// executed on successful acknowledgement.
-pub struct ComposedAcker<A: Acker, F: FnOnce() + Send + Sync + 'static> {
-    acker: A,
-    on_ack: F,
+/// An `Acker` implementation that composes two `Acker` instances.
+///
+/// The `ack` and `nack` methods on the second `Acker` instance will only be
+/// called if the first `Acker` instance succeeds.
+pub struct ComposedAcker<A, B> {
+    fst: A,
+    snd: B,
 }
 
-impl<A: Acker, F: Fn() + Send + Sync + 'static> ComposedAcker<A, F> {
-    pub fn new(acker: A, on_ack: F) -> Self {
-        Self { acker, on_ack }
+impl<A, B> ComposedAcker<A, B> {
+    pub fn new(fst: A, snd: B) -> Self {
+        Self { fst, snd }
     }
 }
 
 #[async_trait]
-impl<A: Acker, F: Fn() + Send + Sync + 'static> Acker for ComposedAcker<A, F> {
+impl<A: Acker, B: Acker> Acker for ComposedAcker<A, B> {
+    /// Acknowledge the second `Acker` instance if the first `Acker` instance
+    /// succeeds.
     async fn ack(&self) -> Result<()> {
-        let result = self.acker.ack().await;
-        if result.is_ok() {
-            (self.on_ack)();
-        }
-        result
+        self.fst.ack().and_then(|_| self.snd.ack()).await
+    }
+
+    /// Negative acknowledge the second `Acker` instance if the first `Acker`
+    /// instance succeeds.
+    async fn nack(&self) -> Result<()> {
+        self.fst.nack().and_then(|_| self.snd.nack()).await
     }
 }
 
@@ -121,6 +143,11 @@ impl NoopAcker {
 #[async_trait]
 impl Acker for NoopAcker {
     async fn ack(&self) -> Result<()> {
+        // noop
+        Ok(())
+    }
+
+    async fn nack(&self) -> Result<()> {
         // noop
         Ok(())
     }

@@ -47,23 +47,24 @@
 //! [`Task`]s and [`Directive`](crate::directive::Directive)s use to
 //! communicate, and provides a simple interface for interacting with these
 //! channels.
+
 use anyhow::Result;
 use futures::{Sink, SinkExt, Stream, StreamExt};
 use tokio::{task::JoinHandle, try_join};
-use tracing::{debug_span, error, instrument, Instrument};
+use tracing::{debug_span, error, instrument, warn, Instrument};
 
 use self::dynamic_channel::{DynamicChannel, DynamicChannelFactory};
 use crate::{
     acker::{Acker, ComposedAcker},
     channel::{coordinated_channel::coordinated_channel, Channel, ChannelFactory, LeaseGuard},
     config::Config,
-    operation::{OpKind, Operation},
+    operation::{FatalStrategy, OpKind, Operation, OperationError},
     serializer::{Serializable, Serializer},
-    task::{AnyTask, AnyTaskResult, RemoteExecute, Task, TaskResult},
+    task::{AnyTask, AnyTaskOutput, AnyTaskResult, RemoteExecute, Task, TaskResult},
 };
 
 type Receiver<Item> = Box<dyn Stream<Item = (Item, Box<dyn Acker>)> + Send + Sync + Unpin>;
-type Sender<Item> = Box<dyn Sink<Item, Error = anyhow::Error> + Send + Sync + Unpin>;
+type Sender<Item> = Box<dyn Sink<Item, Error = anyhow::Error> + Send + Unpin>;
 type CoordinatedTaskChannel<Op, Metadata> = (
     String,
     Sender<Task<Op, Metadata>>,
@@ -176,6 +177,10 @@ impl Runtime {
             .collect()
     }
 
+    pub async fn close(&self) -> Result<()> {
+        self.task_channel.close().await
+    }
+
     /// Provides a [`Sink`] for dispatching [`Task`]s of the specified
     /// [`Operation`] and its associated `Metadata`.
     ///
@@ -239,8 +244,12 @@ impl Runtime {
     ///
     /// # Example
     /// ```
-    /// use anyhow::Result;
-    /// use paladin::{runtime::Runtime, task::Task, operation::Operation, opkind_derive::OpKind};
+    /// use paladin::{
+    ///     runtime::Runtime,
+    ///     task::Task,
+    ///     operation::{Operation, Result},
+    ///     opkind_derive::OpKind
+    /// };
     /// use serde::{Deserialize, Serialize};
     /// use futures::{StreamExt, SinkExt};
     ///
@@ -266,7 +275,7 @@ impl Runtime {
     /// #    }
     /// # }
     ///
-    /// async fn run_task<Op: Operation>(op: Op, runtime: Runtime, input: Op::Input) -> Result<()> {
+    /// async fn run_task<Op: Operation>(op: Op, runtime: Runtime, input: Op::Input) -> anyhow::Result<()> {
     ///     let (identifier, mut sender, mut receiver) = runtime.lease_coordinated_task_channel::<Op, Metadata>().await?;
     ///
     ///     // Issue a task with the identifier of the receiver
@@ -308,19 +317,9 @@ impl Runtime {
         // behalf of the caller. This allows the caller to receive typed
         // `TaskResult`s without having to worry about deserialization.
         let receiver = result_channel
-            .receiver::<AnyTaskResult<Op>>()
+            .receiver::<AnyTaskResult>()
             .await?
-            .filter_map(move |(result, acker)| {
-                Box::pin(async move {
-                    match result.into_task_result::<Metadata>() {
-                        Ok(result) => Some((result, acker)),
-                        Err(e) => {
-                            error!("Failed to deserialize result: {}", e);
-                            None
-                        }
-                    }
-                })
-            });
+            .map(move |(result, acker)| (result.into_task_result::<Op, Metadata>(), acker));
 
         // Enable coordination between the task and result channels.
         let (sender, receiver) = coordinated_channel(task_sender, receiver);
@@ -337,9 +336,8 @@ impl Runtime {
             receiver.map(|((result, original_acker), coordinated_acker)| {
                 (
                     result,
-                    Box::new(ComposedAcker::new(original_acker, move || {
-                        coordinated_acker.ack()
-                    })) as Box<dyn Acker>,
+                    Box::new(ComposedAcker::new(original_acker, coordinated_acker))
+                        as Box<dyn Acker>,
                 )
             });
 
@@ -367,13 +365,28 @@ impl Drop for Runtime {
 ///
 /// This runtime provides functionality for the three responsibilities of a
 /// worker process.
-/// 1. Listen for new [`Task`](crate::task::Task)s.
-/// 2. Execute those [`Task`](crate::task::Task)s.
-/// 3. Send back the results of a [`Task`](crate::task::Task) execution.
+/// 1. Listen for new [`Task`]s.
+/// 2. Execute those [`Task`]s.
+/// 3. Send back the results of a [`Task`] execution.
 pub struct WorkerRuntime<Kind: OpKind> {
     channel_factory: DynamicChannelFactory,
     task_channel: DynamicChannel,
     _kind: std::marker::PhantomData<Kind>,
+}
+
+#[derive(Debug)]
+pub struct ExecutionOk<'a, A> {
+    pub routing_key: &'a str,
+    pub output: AnyTaskOutput,
+    pub acker: A,
+}
+
+#[derive(Debug)]
+pub struct ExecutionErr<'a, A, E> {
+    routing_key: &'a str,
+    err: E,
+    strategy: FatalStrategy,
+    acker: A,
 }
 
 impl<Kind: OpKind> WorkerRuntime<Kind>
@@ -400,11 +413,8 @@ where
     /// The [`opkind_derive::OpKind`](crate::opkind_derive::OpKind) macro uses
     /// this internally to provide a [`RemoteExecute`] implementation for
     /// [`AnyTask`].
-    #[instrument(skip(self), level = "debug")]
-    pub async fn get_result_sender<Op: Operation>(
-        &self,
-        identifier: &str,
-    ) -> Result<Sender<AnyTaskResult<Op>>> {
+    #[instrument(skip(self), level = "trace")]
+    pub async fn get_result_sender(&self, identifier: &str) -> Result<Sender<AnyTaskResult>> {
         self.channel_factory.get(identifier).await?.sender().await
     }
 
@@ -416,9 +426,13 @@ where
     /// # Example
     /// ```no_run
     /// use clap::Parser;
-    /// use paladin::{config::Config, runtime::WorkerRuntime, operation::Operation, opkind_derive::OpKind};
+    /// use paladin::{
+    ///     config::Config,
+    ///     runtime::WorkerRuntime,
+    ///     operation::{Operation, Result},
+    ///     opkind_derive::OpKind
+    /// };
     /// use serde::{Deserialize, Serialize};
-    /// use anyhow::Result;
     /// use futures::StreamExt;
     ///
     /// # #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
@@ -447,7 +461,7 @@ where
     /// }
     ///
     /// #[tokio::main]
-    /// async fn main() -> Result<()> {
+    /// async fn main() -> anyhow::Result<()> {
     ///     let args = Cli::parse();
     ///     let runtime: WorkerRuntime<MyOps> = WorkerRuntime::from_config(&args.options).await?;
     ///     
@@ -463,8 +477,134 @@ where
         self.task_channel.receiver().await
     }
 
+    /// Notify the [`Runtime`] of a fatal error.
+    ///
+    /// This will pass the error back to the consumer of the [`Task`]
+    /// and nack the message.
+    pub async fn dispatch_fatal<'a, A, E>(
+        &self,
+        ExecutionErr {
+            routing_key,
+            err,
+            strategy,
+            acker,
+        }: ExecutionErr<'a, A, E>,
+    ) -> Result<()>
+    where
+        A: Acker,
+        E: std::fmt::Display + std::fmt::Debug,
+    {
+        error!("Encountered fatal error: {err}");
+        let mut sender = self.get_result_sender(routing_key).await?;
+        sender.send(AnyTaskResult::Err(err.to_string())).await?;
+        acker.nack().await?;
+        match strategy {
+            FatalStrategy::Ignore => Ok(()),
+            // TODO: Signal to all other workers in the directive chain to terminate.
+            FatalStrategy::Terminate => Ok(()),
+        }
+    }
+
+    /// Notify the [`Runtime`] of a successful execution.
+    ///
+    /// This will pass the output back to the consumer of the [`Task`]
+    /// and ack the message.
+    pub async fn dispatch_ok<'a, A>(
+        &self,
+        ExecutionOk {
+            routing_key,
+            output,
+            acker,
+        }: ExecutionOk<'a, A>,
+    ) -> Result<()>
+    where
+        A: Acker,
+    {
+        let mut sender = self.get_result_sender(routing_key).await?;
+        sender.send(AnyTaskResult::Ok(output)).await?;
+        sender.close().await?;
+        acker.ack().await?;
+        Ok(())
+    }
+
+    /// Executes a [`Task`] remotely.
+    ///
+    /// This is the primary entry point for executing [`Task`]s. It is used
+    /// internally by the [`main_loop`](Self::main_loop) function, but can also
+    /// be used directly if the caller needs more control over the execution
+    /// process.
+    ///
+    /// In summary, this function:
+    /// 1. Executes the [`Task`].
+    /// 2. Retries the [`Task`] if it fails with a transient error.
+    /// 3. Terminates the [`Task`] if it fails with a fatal error.
+    /// 4. Terminates the [`Task`] if it fails with a transient error and the
+    ///    retry strategy is exhausted.
+    /// 5. Dispatches the result back to the consumer of the [`Task`].
+    pub async fn remote_execute<A>(&self, payload: AnyTask<Kind>, acker: A) -> Result<()>
+    where
+        A: Acker,
+    {
+        let get_result = || {
+            payload
+                .remote_execute(self)
+                .instrument(debug_span!("remote_execute", routing_key = %payload.routing_key, op = ?payload.op_kind))
+        };
+
+        match get_result().await {
+            Ok(output) => {
+                self.dispatch_ok(ExecutionOk {
+                    routing_key: &payload.routing_key,
+                    output,
+                    acker,
+                })
+                .await
+            }
+
+            Err(err) => match err {
+                OperationError::Fatal { err, strategy } => {
+                    self.dispatch_fatal(ExecutionErr {
+                        routing_key: &payload.routing_key,
+                        err,
+                        strategy,
+                        acker,
+                    })
+                    .await
+                }
+                OperationError::Transient {
+                    err,
+                    retry_strategy,
+                    fatal_strategy,
+                } => {
+                    warn!("Encountered transient error: {err:?}");
+                    let result = retry_strategy.retry(get_result).await;
+                    match result {
+                        Ok(output) => {
+                            self.dispatch_ok(ExecutionOk {
+                                routing_key: &payload.routing_key,
+                                output,
+                                acker,
+                            })
+                            .await
+                        }
+
+                        Err(err) => {
+                            self.dispatch_fatal(ExecutionErr {
+                                routing_key: &payload.routing_key,
+                                err: err.into_fatal(),
+                                strategy: fatal_strategy,
+                                acker,
+                            })
+                            .await
+                        }
+                    }
+                }
+            },
+        }
+    }
+
     /// A default worker loop that can be used to process
-    /// [`Task`](crate::task::Task)s.
+    /// [`Task`]s.
     ///
     /// Worker implementations generally wont vary, as the their
     /// primary responsibility is to process incoming tasks. We provide one
@@ -473,12 +613,11 @@ where
     ///
     /// # Example
     /// ```no_run
-    /// use anyhow::Result;
     /// use paladin::{
     ///     runtime::WorkerRuntime,
     ///     config::Config,
     ///     task::Task,
-    ///     operation::Operation,
+    ///     operation::{Result, Operation},
     ///     opkind_derive::OpKind,
     /// };
     /// use clap::Parser;
@@ -509,7 +648,7 @@ where
     /// }
     ///
     /// #[tokio::main]
-    /// async fn main() -> Result<()> {
+    /// async fn main() -> anyhow::Result<()> {
     ///     let args = Cli::parse();
     ///     let runtime = WorkerRuntime::from_config(&args.options).await?;
     ///     runtime.main_loop().await?;
@@ -520,20 +659,8 @@ where
     pub async fn main_loop(&self) -> Result<()> {
         let mut task_stream = self.get_task_receiver().await?;
 
-        while let Some((payload, delivery)) = task_stream.next().await {
-            let span = debug_span!("remote_execute", routing_key = %payload.routing_key, op = ?payload.op_kind);
-
-            let execution = {
-                payload.remote_execute(self).instrument(span).await?;
-
-                delivery.ack().await?;
-
-                Ok::<(), anyhow::Error>(())
-            };
-
-            if let Err(e) = execution {
-                error!("Failed to process task {e}");
-            }
+        while let Some((payload, acker)) = task_stream.next().await {
+            _ = self.remote_execute(payload, acker).await;
         }
 
         Ok(())

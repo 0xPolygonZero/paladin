@@ -48,13 +48,12 @@ pub trait Directive: Send {
     /// Computing the length of a stream of strings:
     /// ```
     /// # use paladin::{
-    /// #    operation::Operation,
+    /// #    operation::{Operation, Result},
     /// #    directive::{Directive, IndexedStream},
     /// #    opkind_derive::OpKind,
     /// #    runtime::Runtime,
     /// # };
     /// # use serde::{Deserialize, Serialize};
-    /// # use anyhow::Result;
     /// #
     /// # #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
     /// struct Length;
@@ -74,13 +73,13 @@ pub trait Directive: Send {
     /// # }
     ///
     /// # #[tokio::main]
-    /// # async fn main() -> Result<()> {
+    /// # async fn main() -> anyhow::Result<()> {
     /// # let runtime = Runtime::in_memory().await?;
     /// let input = ["hel", "lo", " world", "!"].iter().map(|s| s.to_string());
     /// let computation = IndexedStream::from(input).map(Length);
     /// let result = computation.run(&runtime).await?;
     /// // The output is an indexed stream, convert it into a sorted vec
-    /// let vec_result = result.into_values_sorted().await
+    /// let vec_result = result.into_values_sorted().await?
     ///     .into_iter()
     ///     .collect::<Vec<_>>();
     ///
@@ -93,13 +92,12 @@ pub trait Directive: Send {
     ///
     /// ```
     /// # use paladin::{
-    /// #    operation::Operation,
+    /// #    operation::{Operation, Result},
     /// #    directive::{Directive, IndexedStream},
     /// #    opkind_derive::OpKind,
     /// #    runtime::Runtime,
     /// # };
     /// # use serde::{Deserialize, Serialize};
-    /// # use anyhow::Result;
     /// #
     /// # #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
     /// struct MultiplyBy(i32);
@@ -119,12 +117,12 @@ pub trait Directive: Send {
     /// # }
     ///
     /// # #[tokio::main]
-    /// # async fn main() -> Result<()> {
+    /// # async fn main() -> anyhow::Result<()> {
     /// # let runtime = Runtime::in_memory().await?;
     /// let computation = IndexedStream::from([1, 2, 3, 4, 5]).map(MultiplyBy(2));
     /// let result = computation.run(&runtime).await?;
     /// // The output is an indexed stream, convert it into a sorted vec
-    /// let vec_result = result.into_values_sorted().await
+    /// let vec_result = result.into_values_sorted().await?
     ///     .into_iter()
     ///     .collect::<Vec<_>>();
     ///
@@ -147,13 +145,12 @@ pub trait Directive: Send {
     /// # Example
     /// ```
     /// # use paladin::{
-    /// #    operation::{Operation, Monoid},
+    /// #    operation::{Operation, Monoid, Result},
     /// #    directive::{Directive, IndexedStream},
     /// #    opkind_derive::OpKind,
     /// #    runtime::Runtime,
     /// # };
     /// # use serde::{Deserialize, Serialize};
-    /// # use anyhow::Result;
     /// #
     /// # #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
     /// struct Multiply;
@@ -176,7 +173,7 @@ pub trait Directive: Send {
     /// # }
     ///
     /// # #[tokio::main]
-    /// # async fn main() -> Result<()> {
+    /// # async fn main() -> anyhow::Result<()> {
     /// # let runtime = Runtime::in_memory().await?;
     /// let computation = IndexedStream::from([1, 2, 3, 4, 5]).fold(Multiply);
     /// let result = computation.run(&runtime).await?;

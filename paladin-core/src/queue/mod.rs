@@ -31,12 +31,18 @@ pub trait Queue {
 pub trait Connection: Send + Sync + Clone + 'static {
     type QueueHandle: QueueHandle;
 
+    /// Close the connection.
+    async fn close(&self) -> Result<()>;
+
     /// Queue declaration should be idempotent, in that it should instantiate a
     /// queue if it does not exist, and otherwise return the existing queue.
     async fn declare_queue(&self, name: &str) -> Result<Self::QueueHandle>;
 
     /// Delete the queue.
     async fn delete_queue(&self, name: &str) -> Result<()>;
+
+    /// Mark the queue for deletion.
+    fn buf_delete_queue(&self, name: &str);
 }
 
 /// A handle to a queue.

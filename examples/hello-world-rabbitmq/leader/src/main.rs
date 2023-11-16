@@ -30,10 +30,13 @@ async fn main() -> Result<()> {
         .map(CharToString)
         .fold(StringConcat);
 
-    let result = computation.run(&runtime).await?;
+    let result = computation.run(&runtime).await;
+    runtime.close().await?;
+
+    let result = result?;
+
     info!("result: {:?}", result);
     assert_eq!(result, "hello world!".to_string());
 
-    std::future::pending::<()>().await;
     Ok(())
 }

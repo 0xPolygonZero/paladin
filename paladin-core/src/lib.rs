@@ -1,3 +1,5 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 //! Distributed computation library for Rust.
 //!
 //! Paladin aims to simplify the challenge of writing distributed programs. It
@@ -51,10 +53,9 @@
 //! [`Directive`](crate::directive::Directive)s and remotely executed.
 //!
 //! ```
-//! use paladin::operation::Operation;
+//! use paladin::operation::{Operation, Result};
 //! # use paladin::opkind_derive::OpKind;
 //! use serde::{Deserialize, Serialize};
-//! use anyhow::Result;
 //!
 //! #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 //! struct FibAt;
@@ -101,9 +102,8 @@
 //! operation.
 //!
 //! ```
-//! use paladin::{operation::Operation, opkind_derive::OpKind};
+//! use paladin::{operation::{Operation, Result}, opkind_derive::OpKind};
 //! use serde::{Deserialize, Serialize};
-//! use anyhow::Result;
 //!
 //! #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 //! struct FibAt;
@@ -148,9 +148,8 @@
 //! program.
 //!
 //! ```
-//! # use paladin::{operation::Operation, opkind_derive::OpKind};
+//! # use paladin::{operation::{Operation, Result}, opkind_derive::OpKind};
 //! # use serde::{Deserialize, Serialize};
-//! # use anyhow::Result;
 //! #
 //! # #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 //! # struct FibAt;
@@ -207,7 +206,7 @@
 //! }
 //!
 //! #[tokio::main]
-//! async fn main() {
+//! async fn main() -> anyhow::Result<()> {
 //!     let runtime = Runtime::in_memory().await.unwrap();
 //!     let stream = IndexedStream::from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 //!     // Compute the fibonacci number at each element in the stream with our
@@ -217,8 +216,13 @@
 //!     let sum = fibs.fold(Sum);
 //!
 //!     // Run the computation.
-//!     let result = sum.run(&runtime).await.unwrap();
-//!     assert_eq!(result, 143);
+//!     let result = sum.run(&runtime).await;
+//!
+//!     // Close the runtime
+//!     runtime.close().await?;
+//!
+//!     assert_eq!(result?, 143);
+//! #   Ok(())
 //! }
 //! ```
 //!
@@ -279,3 +283,4 @@ pub mod opkind_derive {
 }
 pub use async_trait::async_trait;
 pub use futures;
+pub use tracing;

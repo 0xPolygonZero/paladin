@@ -118,6 +118,10 @@ impl InMemoryConnection {
 impl Connection for InMemoryConnection {
     type QueueHandle = InMemoryQueueHandle;
 
+    async fn close(&self) -> Result<()> {
+        Ok(())
+    }
+
     async fn declare_queue(&self, name: &str) -> Result<Self::QueueHandle> {
         let mut lock = self.queues.lock().await;
         match lock.get(name) {
@@ -137,6 +141,8 @@ impl Connection for InMemoryConnection {
         }
         Ok(())
     }
+
+    fn buf_delete_queue(&self, _: &str) {}
 }
 
 /// An in-memory implementation of [`QueueHandle`].

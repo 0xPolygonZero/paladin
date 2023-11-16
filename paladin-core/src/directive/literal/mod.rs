@@ -5,13 +5,12 @@
 /// ## Example
 /// ```
 /// # use paladin::{
-/// #    operation::Operation,
+/// #    operation::{Operation, Result},
 /// #    directive::{Directive, Literal},
 /// #    opkind_derive::OpKind,
 /// #    runtime::Runtime,
 /// # };
 /// # use serde::{Deserialize, Serialize};
-/// # use anyhow::Result;
 /// #
 /// # #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 /// struct MultiplyBy(i32);
@@ -31,7 +30,7 @@
 /// # }
 ///
 /// # #[tokio::main]
-/// # async fn main() -> Result<()> {
+/// # async fn main() -> anyhow::Result<()> {
 /// # let runtime = Runtime::in_memory().await?;
 /// let computation = Literal(5).map(MultiplyBy(2));
 /// let result = computation.run(&runtime).await?;

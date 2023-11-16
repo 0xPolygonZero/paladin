@@ -1,5 +1,5 @@
 //! State coordination between two distinct channel pipes (a
-//! [`Sink`](futures::sink::Sink) and a [`Stream`](futures::stream::Stream)).
+//! [`Sink`] and a [`Stream`]).
 //!
 //! Generally when working with channels, the expectation is that closing or
 //! dropping a sender will signal to the receiver that the channel is closed.
@@ -50,7 +50,7 @@ impl ChannelState {
 }
 
 /// State coordination between two distinct channel pipes (a
-/// [`Sink`](futures::sink::Sink) and a [`Stream`](futures::stream::Stream)).
+/// [`Sink`] and a [`Stream`]).
 ///
 /// Generally when working with channels, the expectation is that closing or
 /// dropping a sender will signal to the receiver that the channel is closed.
