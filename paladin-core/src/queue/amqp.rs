@@ -45,12 +45,17 @@
 //!     Ok(())
 //! }
 //! ```
-use std::{pin::Pin, sync::Arc};
+use std::{
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+};
 
 use anyhow::Result;
 use async_trait::async_trait;
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::Stream;
 use lapin::options::QueueDeleteOptions;
+use pin_project::pin_project;
 use tracing::{error, instrument};
 
 use super::{Connection, Consumer, Queue, QueueHandle};
@@ -326,11 +331,45 @@ pub struct AMQPConsumer {
     serializer: Serializer,
 }
 
+#[pin_project]
+pub struct AMQPConsumerStream<PayloadTarget> {
+    #[pin]
+    inner: lapin::Consumer,
+    serializer: Serializer,
+    _phantom: std::marker::PhantomData<PayloadTarget>,
+}
+
+impl<PayloadTarget: Serializable> Stream for AMQPConsumerStream<PayloadTarget> {
+    type Item = (PayloadTarget, AMQPAcker);
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.project();
+        match this.inner.poll_next(cx) {
+            Poll::Ready(Some(Ok(delivery))) => {
+                let payload = this.serializer.from_bytes(&delivery.data);
+                match payload {
+                    Ok(payload) => Poll::Ready(Some((payload, AMQPAcker { delivery }))),
+                    Err(err) => {
+                        error!("Error deserializing message, error: {err}");
+                        Poll::Pending
+                    }
+                }
+            }
+            Poll::Ready(Some(Err(err))) => {
+                let err = anyhow::Error::from(err);
+                error!("Error receiving message, error: {err}",);
+                Poll::Pending
+            }
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
 #[async_trait]
 impl Consumer for AMQPConsumer {
     type Acker = AMQPAcker;
-    type Stream<PayloadTarget: Serializable> =
-        Pin<Box<dyn Stream<Item = (PayloadTarget, Self::Acker)> + Send + Sync>>;
+    type Stream<PayloadTarget: Serializable> = AMQPConsumerStream<PayloadTarget>;
 
     /// Stream the results of the consumer.
     ///
@@ -376,7 +415,6 @@ impl Consumer for AMQPConsumer {
     /// }
     #[instrument(skip(self), level = "trace")]
     async fn stream<PayloadTarget: Serializable>(self) -> Result<Self::Stream<PayloadTarget>> {
-        let serializer = self.serializer;
         let consumer = self
             .channel
             .basic_consume(
@@ -387,25 +425,11 @@ impl Consumer for AMQPConsumer {
             )
             .await?;
 
-        let stream = consumer
-            .map_err(anyhow::Error::from)
-            .filter_map(move |res| async move {
-                match res {
-                    Ok(delivery) => match serializer.from_bytes(&delivery.data) {
-                        Ok(payload) => Some((payload, AMQPAcker { delivery })),
-                        Err(err) => {
-                            error!("Error deserializing message, error: {err}");
-                            None
-                        }
-                    },
-                    Err(err) => {
-                        error!("Error receiving message, error: {err}",);
-                        None
-                    }
-                }
-            });
-
-        Ok(Box::pin(stream))
+        Ok(AMQPConsumerStream {
+            inner: consumer,
+            serializer: self.serializer,
+            _phantom: std::marker::PhantomData,
+        })
     }
 }
 
