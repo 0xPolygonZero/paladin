@@ -54,7 +54,7 @@ pub trait Channel: Send + Sync + 'static {
     async fn receiver<T: Serializable>(&self) -> Result<Self::Receiver<T>>;
 
     /// Mark the channel for release.
-    fn release(&self);
+    async fn release(&self) -> Result<()>;
 }
 
 /// Behavior for issuing new channels and retrieving existing channels.
@@ -124,7 +124,9 @@ impl<C: Channel, Pipe> PinnedDrop for LeaseGuard<C, Pipe> {
     fn drop(self: Pin<&mut Self>) {
         let this = self.project();
         if let Some(channel) = this.channel.take() {
-            channel.release();
+            tokio::spawn(async move {
+                _ = channel.release().await;
+            });
         }
     }
 }
