@@ -154,8 +154,9 @@ impl<
     }
 
     /// Delete the underlying queue.
-    fn release(&self) {
-        self.connection.buf_delete_queue(&self.identifier);
+    async fn release(&self) -> Result<()> {
+        self.connection.delete_queue(&self.identifier).await?;
+        Ok(())
     }
 }
 

@@ -45,15 +45,11 @@
 //!     Ok(())
 //! }
 //! ```
-use std::{
-    collections::VecDeque,
-    pin::Pin,
-    sync::{Arc, Mutex},
-};
+use std::{pin::Pin, sync::Arc};
 
 use anyhow::Result;
 use async_trait::async_trait;
-use futures::{stream::FuturesUnordered, Stream, StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use lapin::options::QueueDeleteOptions;
 use tracing::{error, instrument};
 
@@ -136,7 +132,6 @@ impl Queue for AMQPQueue {
             channel,
             connection: Arc::new(connection),
             serializer: self.serializer,
-            queue_deletion_buffer: Arc::new(Mutex::new(VecDeque::new())),
         })
     }
 }
@@ -165,32 +160,6 @@ pub struct AMQPConnection {
     channel: lapin::Channel,
     connection: Arc<lapin::Connection>,
     serializer: Serializer,
-    queue_deletion_buffer: Arc<Mutex<VecDeque<String>>>,
-}
-
-impl AMQPConnection {
-    async fn flush_queue_deletion_buffer(&self) -> Result<()> {
-        let names = {
-            let mut deletion_buf = self
-                .queue_deletion_buffer
-                .lock()
-                .expect("queue_deletion_buffer lock");
-
-            let mut names = Vec::with_capacity(deletion_buf.len());
-            while let Some(name) = deletion_buf.pop_front() {
-                names.push(name);
-            }
-            names
-        };
-
-        let futs: FuturesUnordered<_> = names
-            .iter()
-            .map(|name| self.delete_queue(name.as_str()))
-            .collect();
-        futs.collect::<Vec<_>>().await;
-
-        Ok(())
-    }
 }
 
 #[async_trait]
@@ -201,7 +170,6 @@ impl Connection for AMQPConnection {
     ///
     /// This will also delete any queues that have been marked for deletion.
     async fn close(&self) -> Result<()> {
-        _ = self.flush_queue_deletion_buffer().await;
         _ = self.channel.close(200, "Goodbye").await;
         _ = self.connection.close(200, "Goodbye").await;
 
@@ -245,13 +213,6 @@ impl Connection for AMQPConnection {
             .await?;
 
         Ok(())
-    }
-
-    fn buf_delete_queue(&self, name: &str) {
-        self.queue_deletion_buffer
-            .lock()
-            .expect("queue_deletion_buffer lock")
-            .push_back(name.to_string());
     }
 }
 

@@ -72,15 +72,17 @@ impl Channel for DynamicChannel {
         }
     }
 
-    fn release(&self) {
+    async fn release(&self) -> Result<()> {
         match self {
             Self::Amqp(channel) => {
-                channel.release();
+                channel.release().await?;
             }
             Self::InMemory(channel) => {
-                channel.release();
+                channel.release().await?;
             }
         }
+
+        Ok(())
     }
 }
 

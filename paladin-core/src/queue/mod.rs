@@ -40,9 +40,6 @@ pub trait Connection: Send + Sync + Clone + 'static {
 
     /// Delete the queue.
     async fn delete_queue(&self, name: &str) -> Result<()>;
-
-    /// Mark the queue for deletion.
-    fn buf_delete_queue(&self, name: &str);
 }
 
 /// A handle to a queue.

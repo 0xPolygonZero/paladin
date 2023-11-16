@@ -141,8 +141,6 @@ impl Connection for InMemoryConnection {
         }
         Ok(())
     }
-
-    fn buf_delete_queue(&self, _: &str) {}
 }
 
 /// An in-memory implementation of [`QueueHandle`].
