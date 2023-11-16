@@ -1,6 +1,6 @@
 [package]
 name = "paladin-core"
-version = "0.1.4"
+version = "0.2.0"
 description = "A Rust distributed algorithm toolkit. Write distributed algorithms without the complexities of distributed systems programming."
 license.workspace = true
 edition.workspace = true
