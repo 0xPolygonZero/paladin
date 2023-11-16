@@ -206,7 +206,7 @@
 //! }
 //!
 //! #[tokio::main]
-//! async fn main() {
+//! async fn main() -> anyhow::Result<()> {
 //!     let runtime = Runtime::in_memory().await.unwrap();
 //!     let stream = IndexedStream::from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 //!     // Compute the fibonacci number at each element in the stream with our
@@ -216,8 +216,13 @@
 //!     let sum = fibs.fold(Sum);
 //!
 //!     // Run the computation.
-//!     let result = sum.run(&runtime).await.unwrap();
-//!     assert_eq!(result, 143);
+//!     let result = sum.run(&runtime).await;
+//!
+//!     // Close the runtime
+//!     runtime.close().await?;
+//!
+//!     assert_eq!(result?, 143);
+//! #   Ok(())
 //! }
 //! ```
 //!
