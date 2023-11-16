@@ -5,7 +5,6 @@ use async_trait::async_trait;
 use futures::{Sink, SinkExt, StreamExt, TryFutureExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, Notify, RwLock};
-use tracing::error;
 
 use super::IndexedStream;
 use crate::{
@@ -13,7 +12,7 @@ use crate::{
     directive::Foldable,
     operation::{Monoid, Operation},
     runtime::Runtime,
-    task::{Task, TaskResult},
+    task::{Task, TaskOutput},
 };
 
 /// Metadata for a [`Fold`] [`Task`].
@@ -27,7 +26,7 @@ struct Metadata {
     range: RangeInclusive<usize>,
 }
 
-impl<Op: Operation> TaskResult<Op, Metadata> {
+impl<Op: Operation> TaskOutput<Op, Metadata> {
     /// Check if the result is the final result of the fold operation.
     ///
     /// This is the case if the range of indices that the result represents is
@@ -38,17 +37,17 @@ impl<Op: Operation> TaskResult<Op, Metadata> {
     }
 }
 
-/// A [`Contiguous`] [`TaskResult`] for [`Task`]s.
-impl<Op: Operation> Contiguous for TaskResult<Op, Metadata> {
+/// A [`Contiguous`] [`TaskOutput`] for [`Task`]s.
+impl<Op: Operation> Contiguous for TaskOutput<Op, Metadata> {
     type Key = usize;
 
-    /// Check if the given [`TaskResult`] is contiguous with the given one.
+    /// Check if the given [`TaskOutput`] is contiguous with the given one.
     fn is_contiguous(&self, other: &Self) -> bool {
         self.metadata.range.end() + 1 == *other.metadata.range.start()
             || *other.metadata.range.end() + 1 == *self.metadata.range.start()
     }
 
-    /// Get the key of the [`TaskResult`].
+    /// Get the key of the [`TaskOutput`].
     ///
     /// We can be sure that the start of the range is safe, as Stream input with
     /// duplicated indices is not allowed and constitutes a logic error.
@@ -57,7 +56,7 @@ impl<Op: Operation> Contiguous for TaskResult<Op, Metadata> {
     }
 }
 
-type Sender<Op> = Box<dyn Sink<Task<Op, Metadata>, Error = anyhow::Error> + Send + Sync + Unpin>;
+type Sender<Op> = Box<dyn Sink<Task<Op, Metadata>, Error = anyhow::Error> + Send + Unpin>;
 
 /// A [`Dispatcher`] abstracts over the common functionality of queuing and
 /// dispatching contiguous [`Task`]s to worker processes.
@@ -71,14 +70,14 @@ type Sender<Op> = Box<dyn Sink<Task<Op, Metadata>, Error = anyhow::Error> + Send
 /// - Attempting to dispatch [`TaskResult`]s if they are contiguous with another
 ///   [`TaskResult`].
 struct Dispatcher<Op: Monoid> {
-    assembler: Arc<Mutex<ContiguousQueue<TaskResult<Op, Metadata>>>>,
+    assembler: Arc<Mutex<ContiguousQueue<TaskOutput<Op, Metadata>>>>,
     sender: Arc<Mutex<Sender<Op>>>,
     channel_identifier: String,
 }
 
 impl<Op: Monoid> Dispatcher<Op> {
     fn new(
-        assembler: Arc<Mutex<ContiguousQueue<TaskResult<Op, Metadata>>>>,
+        assembler: Arc<Mutex<ContiguousQueue<TaskOutput<Op, Metadata>>>>,
         sender: Arc<Mutex<Sender<Op>>>,
         channel_identifier: String,
     ) -> Self {
@@ -90,13 +89,13 @@ impl<Op: Monoid> Dispatcher<Op> {
     }
 
     /// Queue the given [`TaskResult`].
-    async fn queue(&self, result: TaskResult<Op, Metadata>) {
+    async fn queue(&self, result: TaskOutput<Op, Metadata>) {
         let mut assembler = self.assembler.lock().await;
         assembler.queue(result);
     }
 
     /// Dequeue the [`TaskResult`] at the given index.
-    async fn dequeue(&self, idx: &usize) -> Option<TaskResult<Op, Metadata>> {
+    async fn dequeue(&self, idx: &usize) -> Option<TaskOutput<Op, Metadata>> {
         let mut assembler = self.assembler.lock().await;
         assembler.dequeue(idx)
     }
@@ -105,7 +104,7 @@ impl<Op: Monoid> Dispatcher<Op> {
     ///
     /// If the given [`TaskResult`] is contiguous with another [`TaskResult`],
     /// then the two are combined and dispatched for further combination.
-    async fn try_dispatch(&self, result: TaskResult<Op, Metadata>) -> Result<()> {
+    async fn try_dispatch(&self, result: TaskOutput<Op, Metadata>) -> Result<()> {
         let mut assembler = self.assembler.lock().await;
 
         if let Some((lhs, rhs)) = assembler.acquire_contiguous_pair_or_queue(result) {
@@ -165,7 +164,6 @@ impl<A: Send + 'static, B: Send + 'static> Foldable<B> for IndexedStream<A> {
         // available. We're doing double duty here, as we also compute the size
         // of the job by tallying the number of inputs.
         let init = self
-            .map(Ok)
             .try_fold(0, |sum, (idx, item)| {
                 let op = m.clone();
                 let dispatcher = dispatcher.clone();
@@ -176,7 +174,7 @@ impl<A: Send + 'static, B: Send + 'static> Foldable<B> for IndexedStream<A> {
                     // we can safely place the input into a `TaskResult`.
                     // Because this represents an uncombined input, we set the
                     // range equal to its index.
-                    let item_result = TaskResult {
+                    let item_result = TaskOutput {
                         op,
                         metadata: Metadata { range: idx..=idx },
                         output: item,
@@ -191,12 +189,6 @@ impl<A: Send + 'static, B: Send + 'static> Foldable<B> for IndexedStream<A> {
                         // Notify the result stream that it can start consuming.
                         should_dispatch.notify_waiters();
                         // Dispatch the task.
-                        // At this point, a failed dispatch is actually a fatal error, as we don't
-                        // have any redelivery guarantees, given that we're
-                        // operating on an in-memory stream. It may be worth
-                        // implementing a redelivery mechanism in the future if we find we encounter
-                        // a lot of issues here, but for now we don't
-                        // attempt to solve that. So we propagate the error (`?`).
                         dispatcher.try_dispatch(item_result).await?;
                     }
 
@@ -212,42 +204,34 @@ impl<A: Send + 'static, B: Send + 'static> Foldable<B> for IndexedStream<A> {
                 Ok::<_, anyhow::Error>(size)
             });
 
-        let resolved_size_clone = resolved_input_size.clone();
-        let dispatcher_clone = dispatcher.clone();
-        let should_dispatch = should_dispatch.clone();
-        let op = m.clone();
-        let result_handle = tokio::spawn(async move {
-            // Wait until at least two inputs have been received.
-            should_dispatch.notified().await;
+        let result_handle = tokio::spawn({
+            let resolved_input_size = resolved_input_size.clone();
+            let dispatcher = dispatcher.clone();
+            let should_dispatch = should_dispatch.clone();
+            let op = m.clone();
 
-            while let Some((result, acker)) = receiver.next().await {
-                // Check to see if the input size is known.
-                if let Some(job_size) = *resolved_size_clone.clone().read().await {
-                    // If it is, we can check to see if the result is the final result (i.e., its
-                    // range comprises the size of the input).
-                    if result.is_final(job_size) {
-                        sender.lock().await.close().await?;
-                        return Ok(result.output);
-                    }
-                }
+            async move {
+                // Wait until at least two inputs have been received.
+                should_dispatch.notified().await;
 
-                match dispatcher_clone.try_dispatch(result).await {
-                    Ok(()) => {
-                        // We don't error out on a failed ack, as we assume the message will be
-                        // redelivered and we'll have another chance to ack.
-                        // This is a low probability event, perhaps
-                        // due to some kind of network failure.
-                        if let Err(e) = acker.ack().await {
-                            error!("Failed to ack result: {}", e);
+                while let Some((result, acker)) = receiver.next().await {
+                    let result = result?;
+                    // Check to see if the input size is known.
+                    if let Some(job_size) = *resolved_input_size.read().await {
+                        // If it is, we can check to see if the result is the final result (i.e.,
+                        // its range comprises the size of the input).
+                        if result.is_final(job_size) {
+                            sender.lock().await.close().await?;
+                            return Ok(result.output);
                         }
                     }
-                    // We failed to dispatch, and similarly to above don't error out.
-                    // Assume we'll have another chance to dispatch after redelivery.
-                    Err(e) => error!("Failed to dispatch result: {}", e),
-                }
-            }
 
-            Ok(op.empty())
+                    dispatcher.try_dispatch(result).await?;
+                    acker.ack().await?;
+                }
+
+                Ok(op.empty())
+            }
         });
 
         let size = init.await?;

@@ -50,9 +50,8 @@
 //! ### Defining an [`Operation`]:
 //!
 //! ```
-//! use paladin::{operation::Operation, opkind_derive::OpKind};
+//! use paladin::{operation::{Operation, Result}, opkind_derive::OpKind};
 //! use serde::{Deserialize, Serialize};
-//! use anyhow::Result;
 //!
 //! #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 //! struct StringLength;
@@ -76,9 +75,8 @@
 //! ### Defining a [`Monoid`]:
 //!
 //! ```
-//! use paladin::{operation::{Monoid, Operation}, opkind_derive::OpKind};
+//! use paladin::{operation::{Monoid, Operation, Result}, opkind_derive::OpKind};
 //! use serde::{Deserialize, Serialize};
-//! use anyhow::Result;
 //!
 //! #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 //! struct StringConcat;
@@ -105,9 +103,8 @@
 //! ### An [`Operation`] with constructor arguments:
 //!
 //! ```
-//! use paladin::{operation::{Monoid, Operation}, opkind_derive::OpKind};
+//! use paladin::{operation::{Monoid, Operation, Result}, opkind_derive::OpKind};
 //! use serde::{Deserialize, Serialize};
-//! use anyhow::Result;
 //!
 //! #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 //! struct MultiplyBy(i32);
@@ -132,12 +129,11 @@
 //!
 //! ```
 //! use paladin::{
-//!     operation::{Monoid, Operation},
+//!     operation::{Monoid, Operation, Result},
 //!     opkind_derive::OpKind,
 //!     serializer::Serializable,
 //! };
 //! use serde::{Deserialize, Serialize};
-//! use anyhow::Result;
 //! use std::{ops::Mul, fmt::Debug};
 //! use num_traits::One;
 //!
@@ -171,12 +167,11 @@
 //! Later on ...
 //! ```
 //! # use paladin::{
-//! #    operation::{Monoid, Operation},
+//! #    operation::{Monoid, Operation, Result},
 //! #    opkind_derive::OpKind,
 //! #    serializer::Serializable,
 //! # };
 //! # use serde::{Deserialize, Serialize};
-//! # use anyhow::Result;
 //! # use std::{ops::Mul, fmt::Debug};
 //! # use num_traits::One;
 //! #
@@ -210,15 +205,14 @@
 //!     directive::{IndexedStream, Directive},
 //! };
 //!
-//! fn main () {
+//! #[tokio::main]
+//! async fn main() {
 //!     let computation = IndexedStream::from([1, 2, 3, 4, 5, 6])
 //!         .fold(GenericMultiplication::<i32>::default());
 //! }
 //! ```
 
 use std::fmt::Debug;
-
-use anyhow::Result;
 
 use crate::serializer::Serializable;
 
@@ -304,3 +298,6 @@ where
         self.combine(a, b)
     }
 }
+
+mod error;
+pub use error::*;

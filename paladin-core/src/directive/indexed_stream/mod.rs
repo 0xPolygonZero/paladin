@@ -3,7 +3,8 @@ use std::{
     task::{Context, Poll},
 };
 
-use futures::{Stream, StreamExt};
+use anyhow::Result;
+use futures::{Stream, TryStreamExt};
 use pin_project::pin_project;
 
 /// A [`Stream`] optimized for parallel processing of ordered data.
@@ -37,7 +38,7 @@ use pin_project::pin_project;
 /// #
 /// # async fn example() {
 /// let mut stream = IndexedStream::from(vec![1, 2, 3]);
-/// while let Some((idx, item)) = stream.next().await {
+/// while let Some(Ok((idx, item))) = stream.next().await {
 ///     println!("{}: {}", idx, item);
 /// }
 /// # }
@@ -56,13 +57,12 @@ use pin_project::pin_project;
 /// ## Example
 /// ```
 /// # use paladin::{
-/// #    operation::{Operation, Monoid},
+/// #    operation::{Operation, Monoid, Result},
 /// #    directive::{Directive, IndexedStream},
 /// #    opkind_derive::OpKind,
 /// #    runtime::Runtime,
 /// # };
 /// # use serde::{Deserialize, Serialize};
-/// # use anyhow::Result;
 /// #
 /// # #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 /// struct Multiply;
@@ -98,7 +98,7 @@ use pin_project::pin_project;
 /// # }
 ///
 /// # #[tokio::main]
-/// # async fn main() -> Result<()> {
+/// # async fn main() -> anyhow::Result<()> {
 /// # let runtime = Runtime::in_memory().await?;
 /// let computation = IndexedStream::from([1, 2, 3, 4, 5])
 ///     .map(MultiplyBy(2))
@@ -111,7 +111,7 @@ use pin_project::pin_project;
 #[pin_project]
 pub struct IndexedStream<Item> {
     #[pin]
-    inner: Box<dyn Stream<Item = (usize, Item)> + Send + Unpin>,
+    inner: Box<dyn Stream<Item = Result<(usize, Item)>> + Send + Unpin>,
 }
 
 impl_lit!(IndexedStream<Item>);
@@ -119,7 +119,7 @@ impl_hkt!(IndexedStream);
 
 impl<Item> IndexedStream<Item> {
     /// Create a new [`IndexedStream`].
-    pub fn new(inner: impl Stream<Item = (usize, Item)> + Send + Unpin + 'static) -> Self {
+    pub fn new(inner: impl Stream<Item = Result<(usize, Item)>> + Send + Unpin + 'static) -> Self {
         Self {
             inner: Box::new(inner),
         }
@@ -133,18 +133,19 @@ impl<Item> IndexedStream<Item> {
     /// # Example
     /// ```
     /// # use paladin::directive::IndexedStream;
-    /// # async fn example() {
+    /// # async fn example() -> anyhow::Result<()> {
     /// let stream = IndexedStream::from(vec![1, 2, 3]);
-    /// let values = stream.into_values_sorted().await
+    /// let values = stream.into_values_sorted().await?
     ///     .into_iter()
     ///     .collect::<Vec<_>>();
     /// assert_eq!(vec![1, 2, 3], values);
+    /// # Ok(())
     /// # }
     /// ```
-    pub async fn into_values_sorted(self) -> impl IntoIterator<Item = Item> {
-        let mut vec = self.collect::<Vec<_>>().await;
+    pub async fn into_values_sorted(self) -> Result<impl IntoIterator<Item = Item>> {
+        let mut vec = self.try_collect::<Vec<_>>().await?;
         vec.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-        vec.into_iter().map(|(_, v)| v)
+        Ok(vec.into_iter().map(|(_, v)| v))
     }
 }
 
@@ -155,17 +156,43 @@ impl<Item> IndexedStream<Item> {
 /// # use paladin::directive::IndexedStream;
 /// let stream = IndexedStream::from(vec![1, 2, 3]);
 /// ```
-pub fn from_into_iterator<Item, IntoIter: IntoIterator<Item = Item> + Send + Sync + 'static>(
+pub fn from_into_iterator<
+    Item: 'static,
+    IntoIter: IntoIterator<Item = Item> + Send + Sync + 'static,
+>(
     iter: IntoIter,
 ) -> IndexedStream<Item>
 where
     <IntoIter as IntoIterator>::IntoIter: Send + Sync,
 {
-    IndexedStream::new(futures::stream::iter(iter.into_iter().enumerate()))
+    IndexedStream::new(futures::stream::iter(iter.into_iter().enumerate().map(Ok)))
+}
+
+/// Create an [`IndexedStream`] from an [`IntoIterator`] containing `Result`s.
+///
+/// # Example
+/// ```
+/// # use paladin::directive::indexed_stream::try_from_into_iterator;
+/// let stream = try_from_into_iterator(vec![Ok(1), Ok(2), Ok(3)]);
+/// ```
+pub fn try_from_into_iterator<
+    Item: 'static,
+    IntoIter: IntoIterator<Item = Result<Item>> + Send + Sync + 'static,
+>(
+    iter: IntoIter,
+) -> IndexedStream<Item>
+where
+    <IntoIter as IntoIterator>::IntoIter: Send + Sync,
+{
+    IndexedStream::new(futures::stream::iter(
+        iter.into_iter()
+            .enumerate()
+            .map(|(idx, item)| item.map(|item| (idx, item))),
+    ))
 }
 
 /// Create an [`IndexedStream`] from an [`IntoIterator`].
-impl<Item, IntoIter: IntoIterator<Item = Item> + Send + Sync + 'static> From<IntoIter>
+impl<Item: 'static, IntoIter: IntoIterator<Item = Item> + Send + Sync + 'static> From<IntoIter>
     for IndexedStream<Item>
 where
     <IntoIter as IntoIterator>::IntoIter: Send + Sync,
@@ -180,7 +207,7 @@ where
 /// This is a passthrough implementation, which simply delegates to the inner
 /// stream.
 impl<Item> Stream for IndexedStream<Item> {
-    type Item = (usize, Item);
+    type Item = Result<(usize, Item)>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();

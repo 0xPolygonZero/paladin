@@ -1,7 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::{SinkExt, StreamExt};
-use tracing::error;
 
 use super::Literal;
 use crate::{directive::Functor, operation::Operation, runtime::Runtime, task::Task};
@@ -27,12 +26,8 @@ impl<A: Send, B: Send + 'static> Functor<B> for Literal<A> {
         sender.close().await?;
 
         if let Some((result, acker)) = receiver.next().await {
-            match acker.ack().await {
-                Ok(()) => return Ok(Literal(result.output)),
-                Err(e) => {
-                    error!("Failed to ack result: {}", e);
-                }
-            }
+            acker.ack().await?;
+            return Ok(Literal(result?.output));
         }
 
         anyhow::bail!("No results received")

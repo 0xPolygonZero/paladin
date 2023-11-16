@@ -45,11 +45,15 @@
 //!     Ok(())
 //! }
 //! ```
-use std::pin::Pin;
+use std::{
+    collections::VecDeque,
+    pin::Pin,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::Result;
 use async_trait::async_trait;
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{stream::FuturesUnordered, Stream, StreamExt, TryStreamExt};
 use lapin::options::QueueDeleteOptions;
 use tracing::{error, instrument};
 
@@ -87,7 +91,6 @@ pub struct AMQPQueue {
     qos: u16,
     /// The AMQP channel. Will be lazily initialized upon calling
     /// `get_connection`.
-    channel: Option<lapin::Channel>,
     serializer: Serializer,
 }
 
@@ -110,7 +113,6 @@ impl AMQPQueue {
         Self {
             uri: options.uri.to_string(),
             qos: options.qos.unwrap_or(1),
-            channel: None,
             serializer: options.serializer,
         }
     }
@@ -121,27 +123,21 @@ impl Queue for AMQPQueue {
     type Connection = AMQPConnection;
 
     async fn get_connection(&self) -> Result<Self::Connection> {
-        match self.channel {
-            Some(ref channel) => Ok(AMQPConnection {
-                channel: channel.clone(),
-                serializer: self.serializer,
-            }),
-            None => {
-                let options = lapin::ConnectionProperties::default()
-                    .with_executor(tokio_executor_trait::Tokio::current())
-                    .with_reactor(tokio_reactor_trait::Tokio);
+        let options = lapin::ConnectionProperties::default()
+            .with_executor(tokio_executor_trait::Tokio::current())
+            .with_reactor(tokio_reactor_trait::Tokio);
 
-                let connection = lapin::Connection::connect(&self.uri, options).await?;
-                let channel = connection.create_channel().await?;
+        let connection = lapin::Connection::connect(&self.uri, options).await?;
+        let channel = connection.create_channel().await?;
 
-                channel.basic_qos(self.qos, Default::default()).await?;
+        channel.basic_qos(self.qos, Default::default()).await?;
 
-                Ok(AMQPConnection {
-                    channel,
-                    serializer: self.serializer,
-                })
-            }
-        }
+        Ok(AMQPConnection {
+            channel,
+            connection: Arc::new(connection),
+            serializer: self.serializer,
+            queue_deletion_buffer: Arc::new(Mutex::new(VecDeque::new())),
+        })
     }
 }
 
@@ -167,12 +163,50 @@ impl Queue for AMQPQueue {
 #[derive(Clone, Debug)]
 pub struct AMQPConnection {
     channel: lapin::Channel,
+    connection: Arc<lapin::Connection>,
     serializer: Serializer,
+    queue_deletion_buffer: Arc<Mutex<VecDeque<String>>>,
+}
+
+impl AMQPConnection {
+    async fn flush_queue_deletion_buffer(&self) -> Result<()> {
+        let names = {
+            let mut deletion_buf = self
+                .queue_deletion_buffer
+                .lock()
+                .expect("queue_deletion_buffer lock");
+
+            let mut names = Vec::with_capacity(deletion_buf.len());
+            while let Some(name) = deletion_buf.pop_front() {
+                names.push(name);
+            }
+            names
+        };
+
+        let futs: FuturesUnordered<_> = names
+            .iter()
+            .map(|name| self.delete_queue(name.as_str()))
+            .collect();
+        futs.collect::<Vec<_>>().await;
+
+        Ok(())
+    }
 }
 
 #[async_trait]
 impl Connection for AMQPConnection {
     type QueueHandle = AMQPQueueHandle;
+
+    /// Close the connection.
+    ///
+    /// This will also delete any queues that have been marked for deletion.
+    async fn close(&self) -> Result<()> {
+        _ = self.flush_queue_deletion_buffer().await;
+        _ = self.channel.close(200, "Goodbye").await;
+        _ = self.connection.close(200, "Goodbye").await;
+
+        Ok(())
+    }
 
     /// Declare an AMQP queue with the given name.
     /// ```no_run
@@ -211,6 +245,13 @@ impl Connection for AMQPConnection {
             .await?;
 
         Ok(())
+    }
+
+    fn buf_delete_queue(&self, name: &str) {
+        self.queue_deletion_buffer
+            .lock()
+            .expect("queue_deletion_buffer lock")
+            .push_back(name.to_string());
     }
 }
 
@@ -417,5 +458,9 @@ pub struct AMQPAcker {
 impl Acker for AMQPAcker {
     async fn ack(&self) -> Result<()> {
         Ok(self.delivery.ack(Default::default()).await?)
+    }
+
+    async fn nack(&self) -> Result<()> {
+        Ok(self.delivery.nack(Default::default()).await?)
     }
 }

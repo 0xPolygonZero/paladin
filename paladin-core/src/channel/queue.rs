@@ -133,6 +133,12 @@ impl<
     type Sender<T: Serializable> = QueueSink<T, QHandle>;
     type Receiver<T: Serializable> = CHandle::Stream<T>;
 
+    /// Close the underlying connection.
+    async fn close(&self) -> Result<()> {
+        self.connection.close().await?;
+        Ok(())
+    }
+
     /// Get a sender for the underlying queue.
     async fn sender<T: Serializable>(&self) -> Result<Self::Sender<T>> {
         let queue = self.connection.declare_queue(&self.identifier).await?;
@@ -148,9 +154,8 @@ impl<
     }
 
     /// Delete the underlying queue.
-    async fn release(&self) -> Result<()> {
-        self.connection.delete_queue(&self.identifier).await?;
-        Ok(())
+    fn release(&self) {
+        self.connection.buf_delete_queue(&self.identifier);
     }
 }
 

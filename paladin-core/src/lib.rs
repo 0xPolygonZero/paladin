@@ -1,3 +1,5 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 //! Distributed computation library for Rust.
 //!
 //! Paladin aims to simplify the challenge of writing distributed programs. It
@@ -51,10 +53,9 @@
 //! [`Directive`](crate::directive::Directive)s and remotely executed.
 //!
 //! ```
-//! use paladin::operation::Operation;
+//! use paladin::operation::{Operation, Result};
 //! # use paladin::opkind_derive::OpKind;
 //! use serde::{Deserialize, Serialize};
-//! use anyhow::Result;
 //!
 //! #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 //! struct FibAt;
@@ -101,9 +102,8 @@
 //! operation.
 //!
 //! ```
-//! use paladin::{operation::Operation, opkind_derive::OpKind};
+//! use paladin::{operation::{Operation, Result}, opkind_derive::OpKind};
 //! use serde::{Deserialize, Serialize};
-//! use anyhow::Result;
 //!
 //! #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 //! struct FibAt;
@@ -148,9 +148,8 @@
 //! program.
 //!
 //! ```
-//! # use paladin::{operation::Operation, opkind_derive::OpKind};
+//! # use paladin::{operation::{Operation, Result}, opkind_derive::OpKind};
 //! # use serde::{Deserialize, Serialize};
-//! # use anyhow::Result;
 //! #
 //! # #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 //! # struct FibAt;
@@ -279,3 +278,4 @@ pub mod opkind_derive {
 }
 pub use async_trait::async_trait;
 pub use futures;
+pub use tracing;

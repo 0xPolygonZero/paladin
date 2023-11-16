@@ -1,8 +1,7 @@
 use std::fmt::Debug;
 
-use anyhow::Result;
 use paladin::{
-    operation::{Monoid, Operation},
+    operation::{Monoid, Operation, Result},
     opkind_derive::OpKind,
 };
 use serde::{Deserialize, Serialize};

@@ -46,11 +46,16 @@ pub struct Task<Op: Operation, Metadata: Serializable> {
 /// [`Task`] that produced it.
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(bound = "Op: Operation")]
-pub struct TaskResult<Op: Operation, Metadata: Serializable> {
+pub struct TaskOutput<Op: Operation, Metadata: Serializable> {
+    /// Metadata associated with the [`Task`] that produced this result.
     pub metadata: Metadata,
+    /// The [`Operation`] that was executed.
     pub op: Op,
+    /// The output of the [`Operation`] execution.
     pub output: Op::Output,
 }
+
+pub type TaskResult<Op, Metadata> = Result<TaskOutput<Op, Metadata>>;
 
 /// A [`Task`] that has been serialized for remote execution.
 ///
@@ -65,7 +70,7 @@ pub struct AnyTask<Kind: OpKind> {
     pub routing_key: String,
     /// Serialized metadata associated with the [`Task`].
     pub metadata: Vec<u8>,
-    /// The [`OpKind`](crate::operation::OpKind) of the [`Operation`] to be
+    /// The [`OpKind`] of the [`Operation`] to be
     /// executed.
     pub op_kind: Kind,
     /// Serialized arguments to the [`Operation`].
@@ -75,19 +80,49 @@ pub struct AnyTask<Kind: OpKind> {
     pub serializer: Serializer,
 }
 
-/// A [`TaskResult`] that has been serialized to be passed back to the caller.
+/// Serialized output of a [`Task`].
 #[derive(Serialize, Deserialize, Debug)]
-#[serde(bound = "Op: Operation")]
-pub struct AnyTaskResult<Op: Operation> {
+pub struct AnyTaskOutput {
     /// Serialized metadata associated with the [`Task`].
     pub metadata: Vec<u8>,
-    /// The concrete [`Operation`] that was executed.
-    pub op: Op,
-    /// The typed output of the [`Operation`] execution.
-    pub output: Op::Output,
-    /// The [`Serializer`] used to serialize and deserialize the [`Operation`]
-    /// arguments.
+    /// Serialized output of the [`Operation`] execution.
+    pub output: Vec<u8>,
+    /// Serialized [`Operation`] that was executed.
+    pub op: Vec<u8>,
+    /// The [`Serializer`] used to serialize and deserialize the [`Operation`].
     pub serializer: Serializer,
+}
+
+impl<Op: Operation, Metadata: Serializable> TryFrom<AnyTaskOutput> for TaskOutput<Op, Metadata> {
+    type Error = anyhow::Error;
+
+    fn try_from(
+        AnyTaskOutput {
+            metadata,
+            output,
+            op,
+            serializer,
+        }: AnyTaskOutput,
+    ) -> Result<Self> {
+        let metadata = serializer.from_bytes(&metadata)?;
+        let output = serializer.from_bytes(&output)?;
+        let op = serializer.from_bytes(&op)?;
+
+        Ok(TaskOutput {
+            metadata,
+            op,
+            output,
+        })
+    }
+}
+
+/// A serializable `Result` type for [`AnyTaskOutput`].
+///
+/// `Result` isn't serializable, so we need to wrap it in a type that is.
+#[derive(Serialize, Deserialize, Debug)]
+pub enum AnyTaskResult {
+    Ok(AnyTaskOutput),
+    Err(String),
 }
 
 impl<Op: Operation, Metadata: Serializable> Task<Op, Metadata> {
@@ -108,16 +143,23 @@ impl<Op: Operation, Metadata: Serializable> Task<Op, Metadata> {
     }
 }
 
-impl<Op: Operation> AnyTaskResult<Op> {
+impl AnyTaskResult {
     /// Convert an opaque [`AnyTaskResult`] into a typed [`TaskResult`].
-    pub fn into_task_result<Metadata: Serializable>(self) -> Result<TaskResult<Op, Metadata>> {
-        let metadata = self.serializer.from_bytes(&self.metadata)?;
+    pub fn into_task_result<Op: Operation, Metadata: Serializable>(
+        self,
+    ) -> TaskResult<Op, Metadata> {
+        match self {
+            Self::Ok(any_task_output) => Ok(any_task_output.try_into()?),
+            Self::Err(msg) => Err(anyhow::anyhow!(msg)),
+        }
+    }
+}
 
-        Ok(TaskResult {
-            metadata,
-            op: self.op,
-            output: self.output,
-        })
+impl<Op: Operation, Metadata: Serializable> From<AnyTaskResult>
+    for Result<TaskOutput<Op, Metadata>>
+{
+    fn from(value: AnyTaskResult) -> Self {
+        value.into_task_result()
     }
 }
 
@@ -134,5 +176,8 @@ impl<Op: Operation> AnyTaskResult<Op> {
 /// [`Channel`](crate::channel::Channel) at the [`Task`]s identifier.
 #[async_trait]
 pub trait RemoteExecute<Kind: OpKind> {
-    async fn remote_execute(self, runtime: &WorkerRuntime<Kind>) -> Result<()>;
+    async fn remote_execute(
+        &self,
+        runtime: &WorkerRuntime<Kind>,
+    ) -> crate::operation::Result<AnyTaskOutput>;
 }

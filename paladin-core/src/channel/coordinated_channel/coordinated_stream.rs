@@ -29,6 +29,7 @@ use futures::Stream;
 use pin_project::pin_project;
 
 use super::ChannelState;
+use crate::acker::Acker;
 
 /// The [`Stream`] end of a coordinated channel.
 ///
@@ -95,6 +96,26 @@ impl CoordinatedAcker {
         if self.state.num_pending_sends.fetch_sub(1, Ordering::SeqCst) == 1 {
             self.waker.wake_by_ref();
         }
+    }
+
+    /// Negative acknowledge the message.
+    ///
+    /// We're not currently handling redelivery, so we just call `ack` here.
+    pub fn nack(&self) {
+        self.ack()
+    }
+}
+
+#[async_trait::async_trait]
+impl Acker for CoordinatedAcker {
+    async fn ack(&self) -> anyhow::Result<()> {
+        self.ack();
+        Ok(())
+    }
+
+    async fn nack(&self) -> anyhow::Result<()> {
+        self.nack();
+        Ok(())
     }
 }
 

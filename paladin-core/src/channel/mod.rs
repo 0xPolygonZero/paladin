@@ -20,7 +20,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use futures::{Sink, Stream};
 use pin_project::{pin_project, pinned_drop};
-use tracing::error;
 
 use crate::{acker::Acker, serializer::Serializable};
 
@@ -42,9 +41,11 @@ trait Sender {
 /// is needed.
 #[async_trait]
 pub trait Channel: Send + Sync + 'static {
-    type Sender<T: Serializable>: Sink<T, Error = anyhow::Error> + Send + Sync;
+    type Sender<T: Serializable>: Sink<T, Error = anyhow::Error> + Send;
     type Acker: Acker;
     type Receiver<T: Serializable>: Stream<Item = (T, Self::Acker)> + Send + Sync;
+
+    async fn close(&self) -> Result<()>;
 
     /// Acquire the sender side of the channel.
     async fn sender<T: Serializable>(&self) -> Result<Self::Sender<T>>;
@@ -52,8 +53,8 @@ pub trait Channel: Send + Sync + 'static {
     /// Acquire the receiver side of the channel.
     async fn receiver<T: Serializable>(&self) -> Result<Self::Receiver<T>>;
 
-    /// Release any resources associated with the channel.
-    async fn release(&self) -> Result<()>;
+    /// Mark the channel for release.
+    fn release(&self);
 }
 
 /// Behavior for issuing new channels and retrieving existing channels.
@@ -123,11 +124,7 @@ impl<C: Channel, Pipe> PinnedDrop for LeaseGuard<C, Pipe> {
     fn drop(self: Pin<&mut Self>) {
         let this = self.project();
         if let Some(channel) = this.channel.take() {
-            tokio::spawn(async move {
-                if let Err(e) = channel.release().await {
-                    error!("Failed to release channel: {}", e);
-                }
-            });
+            channel.release();
         }
     }
 }

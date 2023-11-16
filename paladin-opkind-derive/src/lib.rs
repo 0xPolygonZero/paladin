@@ -104,19 +104,42 @@ pub fn op_kind_derive(input: TokenStream) -> TokenStream {
         .iter()
         .map(|(variant_name, _, _)| {
             quote! {
-                #name::#variant_name(op) => {
-                    let input = self.serializer.from_bytes(&self.input)?;
+                #name::#variant_name(ref op) => {
+                    let input = self.serializer
+                        .from_bytes(&self.input)
+                        .map_err(|err| ::paladin::operation::FatalError::from_anyhow(
+                            err,
+                            ::paladin::operation::FatalStrategy::Terminate
+                        ))?;
+
+                    ::paladin::tracing::debug!("executing operation with input: {:?}", input);
+
                     let output = op.execute(input)?;
-                    let response = ::paladin::task::AnyTaskResult {
-                        metadata: self.metadata,
-                        op,
-                        output,
+
+                    ::paladin::tracing::debug!("operation executed successfully: {:?}", output);
+
+                    let serialized_output = self.serializer
+                        .to_bytes(&output)
+                        .map_err(|err| ::paladin::operation::FatalError::from_anyhow(
+                            err,
+                            ::paladin::operation::FatalStrategy::Terminate
+                        ))?;
+
+                    let serialized_op = self.serializer
+                        .to_bytes(&op)
+                        .map_err(|err| ::paladin::operation::FatalError::from_anyhow(
+                            err,
+                            ::paladin::operation::FatalStrategy::Terminate
+                        ))?;
+
+                    let response = ::paladin::task::AnyTaskOutput {
+                        metadata: self.metadata.clone(),
+                        op: serialized_op,
+                        output: serialized_output,
                         serializer: self.serializer,
                     };
-                    let mut sender = runtime.get_result_sender(&self.routing_key).await?;
-                    ::paladin::futures::SinkExt::send(&mut sender, response).await?;
 
-                    Ok(())
+                    Ok(response)
                 }
             }
         })
@@ -163,7 +186,7 @@ pub fn op_kind_derive(input: TokenStream) -> TokenStream {
 
         #[::paladin::async_trait]
         impl ::paladin::task::RemoteExecute<#name> for ::paladin::task::AnyTask<#name> {
-            async fn remote_execute(self, runtime: &::paladin::runtime::WorkerRuntime<#name>) -> ::anyhow::Result<()> {
+            async fn remote_execute(&self, runtime: &::paladin::runtime::WorkerRuntime<#name>) -> ::paladin::operation::Result<::paladin::task::AnyTaskOutput> {
                 match self.op_kind {
                     #(#match_arms)*,
                 }

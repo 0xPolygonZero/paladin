@@ -12,6 +12,7 @@ use std::{
 use anyhow::{anyhow, bail};
 use futures::{ready, Sink};
 use pin_project::{pin_project, pinned_drop};
+use thiserror::Error;
 
 use super::ChannelState;
 
@@ -23,14 +24,14 @@ use super::ChannelState;
 /// - Closes the channel when dropped or explicitly closed.
 #[pin_project(PinnedDrop)]
 #[derive(Clone)]
-pub struct CoordinatedSink<T: Unpin, Inner: Sink<T, Error = anyhow::Error>> {
+pub struct CoordinatedSink<T, Inner> {
     #[pin]
     inner: Inner,
     state: Arc<ChannelState>,
     _marker: std::marker::PhantomData<T>,
 }
 
-impl<T: Unpin, Inner: Sink<T, Error = anyhow::Error>> CoordinatedSink<T, Inner> {
+impl<T, Inner> CoordinatedSink<T, Inner> {
     pub fn new(inner: Inner, state: Arc<ChannelState>) -> Self {
         Self {
             inner,
@@ -41,32 +42,24 @@ impl<T: Unpin, Inner: Sink<T, Error = anyhow::Error>> CoordinatedSink<T, Inner> 
 }
 
 #[pinned_drop]
-impl<T: Unpin, Inner: Sink<T, Error = anyhow::Error>> PinnedDrop for CoordinatedSink<T, Inner> {
+impl<T, Inner> PinnedDrop for CoordinatedSink<T, Inner> {
     fn drop(self: Pin<&mut Self>) {
         self.state.close();
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum CoordinatedSinkError {
-    Inner(anyhow::Error),
+    #[error("Inner error: {0}")]
+    Inner(#[from] anyhow::Error),
 
+    #[error("Sink is closed")]
     SinkClosed,
 }
 
 fn err_closed<T>() -> anyhow::Result<T> {
     bail!(CoordinatedSinkError::SinkClosed)
 }
-
-impl std::fmt::Display for CoordinatedSinkError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CoordinatedSinkError::Inner(e) => write!(f, "Inner error: {}", e),
-            CoordinatedSinkError::SinkClosed => write!(f, "Sink is closed"),
-        }
-    }
-}
-impl std::error::Error for CoordinatedSinkError {}
 
 impl<T: Unpin, Inner: Sink<T, Error = anyhow::Error>> Sink<T> for CoordinatedSink<T, Inner> {
     type Error = anyhow::Error;
