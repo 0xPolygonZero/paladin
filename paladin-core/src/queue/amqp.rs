@@ -54,7 +54,7 @@ use std::{
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::Stream;
-use lapin::options::QueueDeleteOptions;
+use lapin::{options::QueueDeleteOptions, ExchangeKind};
 use pin_project::pin_project;
 use tracing::{error, instrument};
 
@@ -170,6 +170,7 @@ pub struct AMQPConnection {
 #[async_trait]
 impl Connection for AMQPConnection {
     type QueueHandle = AMQPQueueHandle;
+    type BroadcastHandle = AMQPBroadcastHandle;
 
     /// Close the connection.
     ///
@@ -218,6 +219,89 @@ impl Connection for AMQPConnection {
             .await?;
 
         Ok(())
+    }
+
+    async fn declare_broadcast(&self, name: &str) -> Result<Self::BroadcastHandle> {
+        let _exchange = self
+            .channel
+            .exchange_declare(
+                name,
+                ExchangeKind::Fanout,
+                Default::default(),
+                Default::default(),
+            )
+            .await?;
+
+        self.channel
+            .queue_declare(name, Default::default(), Default::default())
+            .await?;
+
+        self.channel
+            .queue_bind(
+                name,
+                name,
+                "", // Routing key is ignored in fanout exchanges
+                Default::default(),
+                Default::default(),
+            )
+            .await?;
+
+        Ok(AMQPBroadcastHandle {
+            channel: self.channel.clone(),
+            name: name.to_string(),
+            serializer: self.serializer,
+        })
+    }
+
+    async fn delete_broadcast(&self, name: &str) -> Result<()> {
+        self.channel
+            .queue_delete(name, QueueDeleteOptions::default())
+            .await?;
+
+        self.channel
+            .exchange_delete(name, Default::default())
+            .await?;
+
+        Ok(())
+    }
+}
+
+/// A handle to an AMQP broadcast channel.
+#[derive(Clone)]
+pub struct AMQPBroadcastHandle {
+    channel: lapin::Channel,
+    name: String,
+    serializer: Serializer,
+}
+
+#[async_trait]
+impl QueueHandle for AMQPBroadcastHandle {
+    type Consumer = AMQPConsumer;
+
+    #[instrument(skip_all, level = "trace")]
+    async fn publish<PayloadTarget: Serializable>(&self, payload: &PayloadTarget) -> Result<()> {
+        self.channel
+            .basic_publish(
+                &self.name,
+                "", // Routing key is ignored in fanout exchanges
+                Default::default(),
+                &self.serializer.to_bytes(payload)?,
+                lapin::BasicProperties::default().with_delivery_mode(2),
+            )
+            .await?
+            .await?;
+
+        Ok(())
+    }
+
+    #[instrument(skip(self), level = "trace")]
+    async fn declare_consumer(&self, consumer_name: &str) -> Result<Self::Consumer> {
+        Ok(AMQPConsumer {
+            channel: self.channel.clone(),
+            queue_name: self.name.clone(),
+            consumer_name: consumer_name.to_string(),
+            serializer: self.serializer,
+        })
     }
 }
 

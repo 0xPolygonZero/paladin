@@ -148,7 +148,7 @@ impl<
     /// Get a receiver for the underlying queue.
     async fn receiver<T: Serializable>(&self) -> Result<Self::Receiver<T>> {
         let queue = self.connection.declare_queue(&self.identifier).await?;
-        let consumer = queue.declare_consumer("").await?;
+        let consumer = queue.declare_consumer(&Uuid::new_v4().to_string()).await?;
 
         Ok(consumer.stream().await?)
     }

@@ -10,7 +10,7 @@
 //! pool to a real queue. Each clone of the connection will maintain references
 //! to same underlying queues.
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     pin::{pin, Pin},
     sync::Arc,
     task::{Context, Poll},
@@ -18,11 +18,12 @@ use std::{
 
 use anyhow::Result;
 use async_trait::async_trait;
+use dashmap::{mapref::entry::Entry, DashMap};
 use futures::{
     lock::{Mutex, OwnedMutexLockFuture},
     ready, Future, Stream,
 };
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
 use tokio_util::sync::PollSemaphore;
 
 use super::{Connection, Consumer, Queue, QueueHandle};
@@ -96,11 +97,18 @@ impl Queue for InMemoryQueue {
 /// ```
 #[derive(Clone)]
 pub struct InMemoryConnection {
-    /// The queues managed by this connection. Queues are indexed by their name
-    /// and stored in an atomically reference counted pointer to allow for
-    /// multiple clones of the connection to maintain references to the same
-    /// queues.
-    queues: Arc<Mutex<HashMap<String, InMemoryQueueHandle>>>,
+    /// The queues managed by this connection.
+    ///
+    /// Queues are indexed by their name  and stored in an atomically reference
+    /// counted pointer to allow for multiple clones of the connection to
+    /// maintain references to the same queues.
+    queues: Arc<DashMap<String, InMemoryQueueHandle>>,
+    /// The broadcasts managed by this connection.
+    ///
+    /// Broadcasts are indexed by their name and stored in an atomically
+    /// reference counted pointer to allow for multiple clones of the connection
+    /// to maintain references to the same broadcasts.
+    broadcasts: Arc<DashMap<String, InMemoryBroadcastHandle>>,
     /// The serializer to use for serializing and deserializing messages.
     serializer: Serializer,
 }
@@ -109,6 +117,7 @@ impl InMemoryConnection {
     pub fn new(serializer: Serializer) -> Self {
         Self {
             queues: Default::default(),
+            broadcasts: Default::default(),
             serializer,
         }
     }
@@ -117,29 +126,168 @@ impl InMemoryConnection {
 #[async_trait]
 impl Connection for InMemoryConnection {
     type QueueHandle = InMemoryQueueHandle;
+    type BroadcastHandle = InMemoryBroadcastHandle;
 
     async fn close(&self) -> Result<()> {
         Ok(())
     }
 
     async fn declare_queue(&self, name: &str) -> Result<Self::QueueHandle> {
-        let mut lock = self.queues.lock().await;
-        match lock.get(name) {
-            Some(queue) => Ok(queue.clone()),
-            None => {
+        match self.queues.entry(name.to_string()) {
+            Entry::Occupied(entry) => Ok(entry.get().clone()),
+            Entry::Vacant(entry) => {
                 let queue = InMemoryQueueHandle::new(self.serializer);
-                lock.insert(name.to_string(), queue.clone());
+                entry.insert(queue.clone());
                 Ok(queue)
             }
         }
     }
 
     async fn delete_queue(&self, name: &str) -> Result<()> {
-        let mut lock = self.queues.lock().await;
-        if lock.get(name).is_some() {
-            lock.remove(name);
+        self.queues.remove(name);
+
+        Ok(())
+    }
+
+    async fn declare_broadcast(&self, name: &str) -> Result<Self::BroadcastHandle> {
+        match self.broadcasts.entry(name.to_string()) {
+            Entry::Occupied(entry) => Ok(entry.get().clone()),
+            Entry::Vacant(entry) => {
+                let queue = InMemoryBroadcastHandle::new(self.serializer);
+                entry.insert(queue.clone());
+                Ok(queue)
+            }
+        }
+    }
+
+    async fn delete_broadcast(&self, name: &str) -> Result<()> {
+        self.broadcasts.remove(name);
+
+        Ok(())
+    }
+}
+
+/// An per-consumer queue for [`InMemoryBroadcastHandle`].
+///
+/// This queue is used to synchronize messages between the broadcast handle and
+/// its consumers. The [`InMemoryConsumer`] will be able to pull messages from
+/// this queue, and the associated [`InMemoryBroadcastHandle`] will be able to
+/// push messages to this queue.
+#[derive(Clone)]
+pub struct ConsumerBroadcastQueue {
+    /// The messages in the queue.
+    messages: Arc<Mutex<VecDeque<Vec<u8>>>>,
+    /// The number of messages in the queue.
+    num_messages: PollSemaphore,
+}
+
+/// An in-memory implementation of [`QueueHandle`] for broadcast queues.
+///
+/// # Example
+///
+/// ```
+/// # use paladin::{
+/// #    serializer::Serializer,
+/// #    acker::Acker,
+/// #    queue::{Queue, Connection, QueueHandle, Consumer, in_memory::InMemoryQueue}
+/// # };
+/// # use serde::{Serialize, Deserialize};
+/// # use anyhow::Result;
+/// # use futures::StreamExt;
+///
+/// #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+/// struct MyStruct {
+///     field: String,
+/// }
+///
+/// #[tokio::main]
+/// async fn main() -> Result<()> {
+///     let queue = InMemoryQueue::new(Serializer::Cbor);
+///     let connection = queue.get_connection().await?;
+///     // Declare a queue
+///     let handle = connection.declare_broadcast("my_queue").await?;
+///
+///     // Publish a message
+///     handle.publish(&MyStruct { field: "Hello, World!".to_string() }).await?;
+///
+///     // Consume the message in the first consumer
+///     let consumer = handle.declare_consumer("consumer_1").await?;
+///     if let Some((message, acker)) = consumer.stream::<MyStruct>().await?.next().await {
+///         acker.ack().await?;
+///         assert_eq!(message, MyStruct { field: "Hello, World!".to_string() });
+///     }
+///
+///     // Consume the message in the second consumer
+///     let consumer = handle.declare_consumer("consumer_2").await?;
+///     if let Some((message, acker)) = consumer.stream::<MyStruct>().await?.next().await {
+///         acker.ack().await?;
+///         assert_eq!(message, MyStruct { field: "Hello, World!".to_string() });
+///     }
+/// #
+/// #    Ok(())
+/// }
+/// ```
+#[derive(Clone)]
+pub struct InMemoryBroadcastHandle {
+    /// The consumers subscribed to the broadcast channel.
+    consumers: Arc<DashMap<String, ConsumerBroadcastQueue>>,
+    /// All messages.
+    ///
+    /// This can be used to replay messages to new consumers.
+    message_history: Arc<RwLock<VecDeque<Vec<u8>>>>,
+    /// The serializer to use for serializing and deserializing messages.
+    serializer: Serializer,
+}
+
+impl InMemoryBroadcastHandle {
+    pub fn new(serializer: Serializer) -> Self {
+        Self {
+            consumers: Default::default(),
+            message_history: Default::default(),
+            serializer,
+        }
+    }
+}
+
+#[async_trait]
+impl QueueHandle for InMemoryBroadcastHandle {
+    type Consumer = InMemoryConsumer;
+
+    /// Publish a message to the broadcast channel.
+    ///
+    /// This will push the message to all consumers of the broadcast channel.
+    async fn publish<PayloadTarget: Serializable>(&self, payload: &PayloadTarget) -> Result<()> {
+        let bytes = self.serializer.to_bytes(payload)?;
+        {
+            let mut history = self.message_history.write().await;
+            history.push_back(bytes.clone());
+        }
+        for consumer in self.consumers.iter() {
+            let mut lock = consumer.messages.lock().await;
+            lock.push_back(bytes.clone());
+            consumer.num_messages.add_permits(1);
         }
         Ok(())
+    }
+
+    async fn declare_consumer(&self, consumer_name: &str) -> Result<Self::Consumer> {
+        let consumer = {
+            let message_history = self.message_history.read().await;
+            let messages = message_history.clone();
+            ConsumerBroadcastQueue {
+                num_messages: PollSemaphore::new(Arc::new(Semaphore::new(messages.len()))),
+                messages: Arc::new(Mutex::new(messages)),
+            }
+        };
+
+        self.consumers
+            .insert(consumer_name.to_string(), consumer.clone());
+
+        Ok(InMemoryConsumer {
+            messages: consumer.messages.clone(),
+            num_messages: consumer.num_messages.clone(),
+            serializer: self.serializer,
+        })
     }
 }
 
@@ -148,16 +296,18 @@ impl Connection for InMemoryConnection {
 /// Cloning this handle will create a new handle that points to the same set of
 /// messages and synchronization state.
 ///
-/// ```
-/// use paladin::{
-///     serializer::Serializer,
-///     acker::Acker,
-///     queue::{Queue, Connection, QueueHandle, Consumer, in_memory::InMemoryQueue}
-/// };
-/// use serde::{Serialize, Deserialize};
-/// use anyhow::Result;
-/// use futures::StreamExt;
+/// # Example
 ///
+/// ```
+/// # use paladin::{
+/// #    serializer::Serializer,
+/// #    acker::Acker,
+/// #    queue::{Queue, Connection, QueueHandle, Consumer, in_memory::InMemoryQueue}
+/// # };
+/// # use serde::{Serialize, Deserialize};
+/// # use anyhow::Result;
+/// # use futures::StreamExt;
+/// #
 /// #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 /// struct MyStruct {
 ///     field: String,
@@ -179,14 +329,16 @@ impl Connection for InMemoryConnection {
 ///         acker.ack().await?;
 ///         assert_eq!(message, MyStruct { field: "Hello, World!".to_string() });
 ///     }
-///     
-///     Ok(())
+/// #    
+/// #    Ok(())
 /// }
 /// ```
 #[derive(Clone)]
 pub struct InMemoryQueueHandle {
-    /// The messages in the queue. They're stored as raw bytes to simulate a
-    /// real queue where serialization and deserialization is required.
+    /// The messages in the queue.
+    ///
+    /// They're stored as raw bytes to simulate a real queue where serialization
+    /// and deserialization is required.
     messages: Arc<Mutex<VecDeque<Vec<u8>>>>,
     /// The number of messages in the queue.
     num_messages: PollSemaphore,
@@ -212,7 +364,6 @@ impl QueueHandle for InMemoryQueueHandle {
         let mut lock = self.messages.lock().await;
         lock.push_back(self.serializer.to_bytes(payload)?);
         self.num_messages.add_permits(1);
-        drop(lock);
 
         Ok(())
     }
@@ -372,5 +523,178 @@ impl Consumer for InMemoryConsumer {
             lock_fut: None,
             _marker: std::marker::PhantomData,
         })
+    }
+}
+
+#[cfg(test)]
+mod helpers {
+    use std::time::Duration;
+
+    use futures::StreamExt;
+    use serde::{Deserialize, Serialize};
+    use tokio::{
+        task::{JoinError, JoinHandle},
+        try_join,
+    };
+
+    use super::*;
+    use crate::acker::Acker;
+
+    #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+    pub(super) struct Payload {
+        field: String,
+    }
+
+    pub(super) fn new_payload(message: &str) -> Payload {
+        Payload {
+            field: message.to_string(),
+        }
+    }
+
+    pub(super) async fn with_timeout<O, F: Future<Output = Result<O, JoinError>>>(
+        fut: F,
+    ) -> Option<O> {
+        let timeout = tokio::time::sleep(Duration::from_millis(10));
+
+        tokio::select! {
+            result = fut => {
+                Some(result.unwrap())
+            }
+            _ = timeout => {
+                None
+            }
+        }
+    }
+
+    pub(super) fn consume_next(consumer: InMemoryConsumer) -> JoinHandle<Payload> {
+        tokio::spawn(async move {
+            let mut stream = consumer.stream::<Payload>().await.unwrap();
+            let (payload, acker) = stream.next().await.unwrap();
+            acker.ack().await.unwrap();
+            payload
+        })
+    }
+
+    pub(super) async fn consumers<H: QueueHandle>(queue: &H) -> (H::Consumer, H::Consumer) {
+        try_join!(queue.declare_consumer("1"), queue.declare_consumer("2")).unwrap()
+    }
+
+    pub(super) fn publish<H: QueueHandle>(queue: &H, payload: &Payload) -> JoinHandle<Result<()>> {
+        let payload = payload.clone();
+        let queue = queue.clone();
+        tokio::spawn(async move { queue.publish(&payload).await })
+    }
+}
+
+#[cfg(test)]
+mod exactly_once {
+
+    use tokio::{join, try_join};
+
+    use super::helpers::*;
+    use super::*;
+
+    async fn queue_handle() -> InMemoryQueueHandle {
+        let queue = InMemoryQueue::new(Serializer::Cbor);
+        let connection = queue.get_connection().await.unwrap();
+        connection.declare_queue("my_queue").await.unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn single_message_delivers_once_publish_first() {
+        let queue = queue_handle().await;
+        publish(&queue, &new_payload("1"));
+
+        let (c1, c2) = consumers(&queue).await;
+        let (r1, r2) = (consume_next(c1), consume_next(c2));
+        let (r1, r2) = join!(with_timeout(r1), with_timeout(r2));
+
+        assert!([r1.clone(), r2.clone()].iter().any(|r| r.is_none()));
+        assert!([r1.clone(), r2.clone()]
+            .iter()
+            .any(|r| r == &Some(new_payload("1"))));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn single_message_delivers_once_publish_last() {
+        let queue = queue_handle().await;
+
+        let (c1, c2) = consumers(&queue).await;
+        let (r1, r2) = (consume_next(c1), consume_next(c2));
+
+        publish(&queue, &new_payload("1"));
+
+        let (r1, r2) = join!(with_timeout(r1), with_timeout(r2));
+
+        assert!([r1.clone(), r2.clone()].iter().any(|p| p.is_none()));
+        assert!([r1.clone(), r2.clone()]
+            .iter()
+            .any(|p| p == &Some(new_payload("1"))));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn double_message_delivers_once_publish_first() {
+        let queue = queue_handle().await;
+        publish(&queue, &new_payload("1"));
+        publish(&queue, &new_payload("2"));
+        let (c1, c2) = consumers(&queue).await;
+        let (r1, r2) = (consume_next(c1), consume_next(c2));
+        let (r1, r2) = try_join!(r1, r2).unwrap();
+
+        assert_ne!(r1, r2)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn double_message_delivers_once_publish_last() {
+        let queue = queue_handle().await;
+
+        let (c1, c2) = consumers(&queue).await;
+        let (r1, r2) = (consume_next(c1), consume_next(c2));
+        publish(&queue, &new_payload("1"));
+        publish(&queue, &new_payload("2"));
+        let (r1, r2) = try_join!(r1, r2).unwrap();
+
+        assert_ne!(r1, r2)
+    }
+}
+
+#[cfg(test)]
+mod broadcast {
+    use tokio::try_join;
+
+    use super::helpers::*;
+    use super::*;
+
+    async fn broadcast_handle() -> InMemoryBroadcastHandle {
+        let queue = InMemoryQueue::new(Serializer::Cbor);
+        let connection = queue.get_connection().await.unwrap();
+        connection.declare_broadcast("my_queue").await.unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn single_message_delivers_to_all_publish_first() {
+        let queue = broadcast_handle().await;
+        let expected = new_payload("1");
+        publish(&queue, &expected);
+
+        let (c1, c2) = consumers(&queue).await;
+        let (r1, r2) = try_join!(consume_next(c1), consume_next(c2)).unwrap();
+
+        assert_eq!(expected, r1);
+        assert_eq!(r1, r2)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn single_message_delivers_to_all_publish_last() {
+        let queue = broadcast_handle().await;
+        let expected = new_payload("1");
+
+        let (c1, c2) = consumers(&queue).await;
+        let (r1, r2) = (consume_next(c1), consume_next(c2));
+        publish(&queue, &expected);
+        let (r1, r2) = try_join!(r1, r2).unwrap();
+
+        assert_eq!(expected, r1);
+        assert_eq!(r1, r2)
     }
 }

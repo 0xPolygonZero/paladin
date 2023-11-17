@@ -25,24 +25,53 @@ pub trait Queue {
 }
 
 /// A connection to a queue.
+///
 /// Connections should be cheap to clone such that references need not be passed
 /// around.
 #[async_trait]
 pub trait Connection: Send + Sync + Clone + 'static {
+    /// A single-delivery queue handle.
+    ///
+    /// This should be used for queues whose messages should be delivered
+    /// exactly once.
     type QueueHandle: QueueHandle;
+    /// A broadcast queue handle.
+    ///
+    /// This should be used for queues whose messages should be delivered to
+    /// all consumers.
+    type BroadcastHandle: QueueHandle;
 
     /// Close the connection.
     async fn close(&self) -> Result<()>;
 
+    /// Declare a queue.
+    ///
     /// Queue declaration should be idempotent, in that it should instantiate a
     /// queue if it does not exist, and otherwise return the existing queue.
+    ///
+    /// Queue handles should be used for queues whose messages should be
+    /// delivered exactly once.
     async fn declare_queue(&self, name: &str) -> Result<Self::QueueHandle>;
 
     /// Delete the queue.
     async fn delete_queue(&self, name: &str) -> Result<()>;
+
+    /// Declare a broadcast queue.
+    ///
+    /// Broadcast queue declaration should be idempotent, in that it should
+    /// instantiate a queue if it does not exist, and otherwise return the
+    /// existing queue.
+    ///
+    /// Broadcast queues should be used for queues whose messages should be
+    /// delivered to all consumers.
+    async fn declare_broadcast(&self, name: &str) -> Result<Self::BroadcastHandle>;
+
+    /// Delete the broadcast queue.
+    async fn delete_broadcast(&self, name: &str) -> Result<()>;
 }
 
 /// A handle to a queue.
+///
 /// Handles should be cheap to clone such that references need not be passed
 /// around.
 #[async_trait]
@@ -50,6 +79,7 @@ pub trait QueueHandle: Clone + Send + Sync + Unpin + 'static {
     type Consumer: Consumer;
 
     /// Publish a message to the queue.
+    ///
     /// The implementation should be take care of serializing the payload before
     /// publishing.
     async fn publish<PayloadTarget: Serializable>(&self, payload: &PayloadTarget) -> Result<()>;
@@ -68,6 +98,7 @@ pub trait Consumer: Clone + Send + Sync + Unpin + 'static {
         + Unpin;
 
     /// Consume messages from the queue as a [`Stream`].
+    ///
     /// The implementation should take care of deserializing the payload before
     /// yielding it.
     async fn stream<PayloadTarget: Serializable>(self) -> Result<Self::Stream<PayloadTarget>>;
