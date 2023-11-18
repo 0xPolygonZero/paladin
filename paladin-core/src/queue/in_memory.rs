@@ -11,6 +11,7 @@
 //! to same underlying queues.
 use std::{
     collections::VecDeque,
+    ops::Deref,
     pin::{pin, Pin},
     sync::Arc,
     task::{Context, Poll},
@@ -18,6 +19,7 @@ use std::{
 
 use anyhow::Result;
 use async_trait::async_trait;
+use bytes::Bytes;
 use dashmap::{mapref::entry::Entry, DashMap};
 use futures::{
     lock::{Mutex, OwnedMutexLockFuture},
@@ -176,7 +178,7 @@ impl Connection for InMemoryConnection {
 #[derive(Clone)]
 pub struct ConsumerBroadcastQueue {
     /// The messages in the queue.
-    messages: Arc<Mutex<VecDeque<Vec<u8>>>>,
+    messages: Arc<Mutex<VecDeque<Bytes>>>,
     /// The number of messages in the queue.
     num_messages: PollSemaphore,
 }
@@ -234,7 +236,7 @@ pub struct InMemoryBroadcastHandle {
     /// All messages.
     ///
     /// This can be used to replay messages to new consumers.
-    message_history: Arc<RwLock<VecDeque<Vec<u8>>>>,
+    message_history: Arc<RwLock<VecDeque<Bytes>>>,
     /// The serializer to use for serializing and deserializing messages.
     serializer: Serializer,
 }
@@ -251,13 +253,14 @@ impl InMemoryBroadcastHandle {
 
 #[async_trait]
 impl QueueHandle for InMemoryBroadcastHandle {
-    type Consumer = InMemoryConsumer;
+    type Consumer = InMemoryConsumer<Bytes>;
 
     /// Publish a message to the broadcast channel.
     ///
     /// This will push the message to all consumers of the broadcast channel.
     async fn publish<PayloadTarget: Serializable>(&self, payload: &PayloadTarget) -> Result<()> {
-        let bytes = self.serializer.to_bytes(payload)?;
+        let bytes = Bytes::from(self.serializer.to_bytes(payload)?);
+
         {
             let mut history = self.message_history.write().await;
             history.push_back(bytes.clone());
@@ -273,7 +276,7 @@ impl QueueHandle for InMemoryBroadcastHandle {
     async fn declare_consumer(&self, consumer_name: &str) -> Result<Self::Consumer> {
         let consumer = {
             let message_history = self.message_history.read().await;
-            let messages = message_history.clone();
+            let messages: VecDeque<_> = message_history.iter().cloned().collect();
             ConsumerBroadcastQueue {
                 num_messages: PollSemaphore::new(Arc::new(Semaphore::new(messages.len()))),
                 messages: Arc::new(Mutex::new(messages)),
@@ -358,7 +361,7 @@ impl InMemoryQueueHandle {
 
 #[async_trait]
 impl QueueHandle for InMemoryQueueHandle {
-    type Consumer = InMemoryConsumer;
+    type Consumer = InMemoryConsumer<Vec<u8>>;
 
     async fn publish<PayloadTarget: Serializable>(&self, payload: &PayloadTarget) -> Result<()> {
         let mut lock = self.messages.lock().await;
@@ -425,8 +428,8 @@ impl QueueHandle for InMemoryQueueHandle {
 /// and release the permit, signaling to the queue that a message has been
 /// consumed.
 #[derive(Clone)]
-pub struct InMemoryConsumer {
-    messages: Arc<Mutex<VecDeque<Vec<u8>>>>,
+pub struct InMemoryConsumer<M> {
+    messages: Arc<Mutex<VecDeque<M>>>,
     serializer: Serializer,
     num_messages: PollSemaphore,
 }
@@ -439,18 +442,15 @@ pub struct InMemoryConsumer {
 /// will attempt to acquire a lock on the queue's messages. Once the lock is
 /// acquired, the stream will pop a message from the queue and release the
 /// permit, signaling to the queue that a message has been consumed.
-pub struct ConsumerStream<T: Serializable> {
+pub struct ConsumerStream<T: Serializable, M> {
     _marker: std::marker::PhantomData<T>,
-    messages: Arc<Mutex<VecDeque<Vec<u8>>>>,
-    lock_fut: Option<(
-        OwnedMutexLockFuture<VecDeque<Vec<u8>>>,
-        OwnedSemaphorePermit,
-    )>,
+    messages: Arc<Mutex<VecDeque<M>>>,
+    lock_fut: Option<(OwnedMutexLockFuture<VecDeque<M>>, OwnedSemaphorePermit)>,
     serializer: Serializer,
     num_messages: PollSemaphore,
 }
 
-impl<T: Serializable> Stream for ConsumerStream<T> {
+impl<T: Serializable, M: Deref<Target = [u8]>> Stream for ConsumerStream<T, M> {
     type Item = (T, NoopAcker);
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -511,9 +511,9 @@ impl<T: Serializable> Stream for ConsumerStream<T> {
 }
 
 #[async_trait]
-impl Consumer for InMemoryConsumer {
+impl<M: Deref<Target = [u8]> + Clone + Send + Sync + 'static> Consumer for InMemoryConsumer<M> {
     type Acker = NoopAcker;
-    type Stream<T: Serializable> = ConsumerStream<T>;
+    type Stream<T: Serializable> = ConsumerStream<T, M>;
 
     async fn stream<T: Serializable>(self) -> Result<Self::Stream<T>> {
         Ok(ConsumerStream {
@@ -542,7 +542,7 @@ mod helpers {
 
     #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
     pub(super) struct Payload {
-        field: String,
+        pub(super) field: String,
     }
 
     pub(super) fn new_payload(message: &str) -> Payload {
@@ -566,12 +566,33 @@ mod helpers {
         }
     }
 
-    pub(super) fn consume_next(consumer: InMemoryConsumer) -> JoinHandle<Payload> {
+    pub(super) fn consume_next<M>(consumer: InMemoryConsumer<M>) -> JoinHandle<Payload>
+    where
+        M: Deref<Target = [u8]> + Clone + Send + Sync + 'static,
+    {
         tokio::spawn(async move {
             let mut stream = consumer.stream::<Payload>().await.unwrap();
             let (payload, acker) = stream.next().await.unwrap();
             acker.ack().await.unwrap();
             payload
+        })
+    }
+
+    pub(super) fn consume_n<M>(consumer: InMemoryConsumer<M>, n: usize) -> JoinHandle<Vec<Payload>>
+    where
+        M: Deref<Target = [u8]> + Clone + Send + Sync + 'static,
+    {
+        tokio::spawn(async move {
+            let stream = consumer.stream::<Payload>().await.unwrap();
+
+            stream
+                .then(|(payload, acker)| async move {
+                    acker.ack().await.unwrap();
+                    payload
+                })
+                .take(n)
+                .collect::<Vec<_>>()
+                .await
         })
     }
 
@@ -583,6 +604,13 @@ mod helpers {
         let payload = payload.clone();
         let queue = queue.clone();
         tokio::spawn(async move { queue.publish(&payload).await })
+    }
+
+    pub(super) fn publish_multi<H: QueueHandle>(
+        queue: &H,
+        payload: &[Payload],
+    ) -> Vec<JoinHandle<Result<()>>> {
+        payload.iter().map(|p| publish(queue, p)).collect()
     }
 }
 
@@ -656,6 +684,21 @@ mod exactly_once {
 
         assert_ne!(r1, r2)
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn many_messages_single_consumer() {
+        let queue = queue_handle().await;
+        let mut payloads = (0..100)
+            .map(|i| new_payload(&i.to_string()))
+            .collect::<Vec<_>>();
+        publish_multi(&queue, &payloads);
+
+        let c = queue.declare_consumer("1").await.unwrap();
+        let mut results = consume_n(c, payloads.len()).await.unwrap();
+        payloads.sort_by(|a, b| a.field.cmp(&b.field));
+        results.sort_by(|a, b| a.field.cmp(&b.field));
+        assert_eq!(payloads, results)
+    }
 }
 
 #[cfg(test)]
@@ -685,16 +728,35 @@ mod broadcast {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn single_message_delivers_to_all_publish_last() {
+    async fn many_messages_single_consumer() {
         let queue = broadcast_handle().await;
-        let expected = new_payload("1");
+        let mut payloads = (0..100)
+            .map(|i| new_payload(&i.to_string()))
+            .collect::<Vec<_>>();
+        publish_multi(&queue, &payloads);
+
+        let c = queue.declare_consumer("1").await.unwrap();
+        let mut results = consume_n(c, payloads.len()).await.unwrap();
+        payloads.sort_by(|a, b| a.field.cmp(&b.field));
+        results.sort_by(|a, b| a.field.cmp(&b.field));
+        assert_eq!(payloads, results)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn many_messages_multi_consumer() {
+        let queue = broadcast_handle().await;
+        let mut payloads = (0..100)
+            .map(|i| new_payload(&i.to_string()))
+            .collect::<Vec<_>>();
+        publish_multi(&queue, &payloads);
 
         let (c1, c2) = consumers(&queue).await;
-        let (r1, r2) = (consume_next(c1), consume_next(c2));
-        publish(&queue, &expected);
-        let (r1, r2) = try_join!(r1, r2).unwrap();
-
-        assert_eq!(expected, r1);
-        assert_eq!(r1, r2)
+        let mut results1 = consume_n(c1, payloads.len()).await.unwrap();
+        let mut results2 = consume_n(c2, payloads.len()).await.unwrap();
+        payloads.sort_by(|a, b| a.field.cmp(&b.field));
+        results1.sort_by(|a, b| a.field.cmp(&b.field));
+        results2.sort_by(|a, b| a.field.cmp(&b.field));
+        assert_eq!(payloads, results1);
+        assert_eq!(payloads, results2)
     }
 }

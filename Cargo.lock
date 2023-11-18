@@ -1028,6 +1028,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "backoff",
+ "bytes",
  "ciborium",
  "clap",
  "dashmap",
