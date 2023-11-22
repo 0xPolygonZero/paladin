@@ -8,7 +8,7 @@
 //! # Examples
 //!
 //! ```no_run
-//! # use paladin::queue::{Queue, Connection, amqp::{AMQPQueue, AMQPQueueOptions}};
+//! # use paladin::queue::{Connection, QueueOptions, amqp::{AMQPConnection, AMQPConnectionOptions}};
 //! # use paladin::serializer::Serializer;
 //! # use paladin::queue::sink::QueueSink;
 //! # use anyhow::Result;
@@ -22,13 +22,12 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
-//! let amqp = AMQPQueue::new(AMQPQueueOptions {
+//! let conn = AMQPConnection::new(AMQPConnectionOptions {
 //!     uri: "amqp://localhost:5672",
 //!     qos: Some(1),
 //!     serializer: Serializer::Cbor,
-//! });
-//! let conn = amqp.get_connection().await?;
-//! let queue = conn.declare_queue("my_queue").await?;
+//! }).await?;
+//! let queue = conn.declare_queue("my_queue", QueueOptions::default()).await?;
 //! let mut sink = QueueSink::new(queue);
 //! sink.send(MyStruct { field: "hello world".to_string() }).await?;
 //!
@@ -57,6 +56,7 @@ use std::{
 
 use anyhow::Result;
 use futures::{ready, FutureExt, Sink};
+use pin_project::pin_project;
 use tokio::task::JoinHandle;
 
 use crate::{queue::QueueHandle, serializer::Serializable};
@@ -64,24 +64,19 @@ use crate::{queue::QueueHandle, serializer::Serializable};
 /// A generic [`Sink`] implementation for [`QueueHandle`].
 /// Abstracts away a Queue dependency from the caller such they may simply
 /// require a [`Sink`].
-pub struct QueueSink<Data, Handle>
-where
-    Handle: QueueHandle,
-{
+#[pin_project]
+pub struct QueueSink<Data, Handle> {
     _phantom: std::marker::PhantomData<Data>,
     queue_handle: Handle,
     send_futures: VecDeque<JoinHandle<Result<()>>>,
 }
 
-impl<Data, Handle> QueueSink<Data, Handle>
-where
-    Handle: QueueHandle,
-{
+impl<Data, Handle> QueueSink<Data, Handle> {
     /// Create a new [`QueueSink`] instance from a [`QueueHandle`].
     ///
     ///
     /// ```no_run
-    /// # use paladin::queue::{Queue, Connection, amqp::{AMQPQueue, AMQPQueueOptions}};
+    /// # use paladin::queue::{Connection, QueueOptions, amqp::{AMQPConnection, AMQPConnectionOptions}};
     /// # use paladin::serializer::Serializer;
     /// # use paladin::queue::sink::QueueSink;
     /// # use anyhow::Result;
@@ -95,13 +90,12 @@ where
     ///
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let amqp = AMQPQueue::new(AMQPQueueOptions {
+    /// let conn = AMQPConnection::new(AMQPConnectionOptions {
     ///     uri: "amqp://localhost:5672",
     ///     qos: Some(1),
     ///     serializer: Serializer::Cbor,
-    /// });
-    /// let conn = amqp.get_connection().await?;
-    /// let queue = conn.declare_queue("my_queue").await?;
+    /// }).await?;
+    /// let queue = conn.declare_queue("my_queue", QueueOptions::default()).await?;
     /// let mut sink = QueueSink::new(queue);
     /// sink.send(MyStruct { field: "hello world".to_string() }).await?;
     ///
@@ -116,16 +110,10 @@ where
     }
 }
 
-impl<Data, Handle: QueueHandle> From<Handle> for QueueSink<Data, Handle> {
-    fn from(queue_handle: Handle) -> Self {
-        Self::new(queue_handle)
-    }
-}
-
 impl<Data, Handle> Sink<Data> for QueueSink<Data, Handle>
 where
     Data: Serializable,
-    Handle: QueueHandle,
+    Handle: QueueHandle + Send + Sync + 'static,
 {
     type Error = anyhow::Error;
 

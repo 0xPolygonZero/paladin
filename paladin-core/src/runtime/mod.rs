@@ -56,7 +56,9 @@ use tracing::{debug_span, error, instrument, warn, Instrument};
 use self::dynamic_channel::{DynamicChannel, DynamicChannelFactory};
 use crate::{
     acker::{Acker, ComposedAcker},
-    channel::{coordinated_channel::coordinated_channel, Channel, ChannelFactory, LeaseGuard},
+    channel::{
+        coordinated_channel::coordinated_channel, Channel, ChannelFactory, ChannelType, LeaseGuard,
+    },
     config::Config,
     operation::{FatalStrategy, OpKind, Operation, OperationError},
     serializer::{Serializable, Serializer},
@@ -116,7 +118,9 @@ impl Runtime {
         AnyTask<K>: RemoteExecute<K>,
     {
         let channel_factory = DynamicChannelFactory::from_config(config).await?;
-        let task_channel = channel_factory.get(&config.task_bus_routing_key).await?;
+        let task_channel = channel_factory
+            .get(&config.task_bus_routing_key, ChannelType::ExactlyOnce)
+            .await?;
         let serializer = Serializer::from(config);
 
         // Spin up an emulator for the worker runtime if we're running in-memory.
@@ -310,8 +314,10 @@ impl Runtime {
     ) -> Result<CoordinatedTaskChannel<Op, Metadata>> {
         // Issue a new channel and return its identifier paired with a stream of
         // results.
-        let (task_sender, (result_channel_identifier, result_channel)) =
-            try_join!(self.get_task_sender(), self.channel_factory.issue())?;
+        let (task_sender, (result_channel_identifier, result_channel)) = try_join!(
+            self.get_task_sender(),
+            self.channel_factory.issue(ChannelType::ExactlyOnce)
+        )?;
 
         // Transform the stream to deserialize the results into typed `TaskResult`s on
         // behalf of the caller. This allows the caller to receive typed
@@ -396,7 +402,9 @@ where
     /// Initializes the [`WorkerRuntime`] with the provided [`Config`].
     pub async fn from_config(config: &Config) -> Result<Self> {
         let channel_factory = DynamicChannelFactory::from_config(config).await?;
-        let task_channel = channel_factory.get(&config.task_bus_routing_key).await?;
+        let task_channel = channel_factory
+            .get(&config.task_bus_routing_key, ChannelType::ExactlyOnce)
+            .await?;
 
         Ok(Self {
             channel_factory,
@@ -415,7 +423,11 @@ where
     /// [`AnyTask`].
     #[instrument(skip(self), level = "trace")]
     pub async fn get_result_sender(&self, identifier: &str) -> Result<Sender<AnyTaskResult>> {
-        self.channel_factory.get(identifier).await?.sender().await
+        self.channel_factory
+            .get(identifier, ChannelType::ExactlyOnce)
+            .await?
+            .sender()
+            .await
     }
 
     /// Provides a [`Stream`] incoming [`AnyTask`]s.

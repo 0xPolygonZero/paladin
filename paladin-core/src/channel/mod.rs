@@ -23,8 +23,10 @@ use pin_project::{pin_project, pinned_drop};
 
 use crate::{acker::Acker, serializer::Serializable};
 
-trait Sender {
-    fn close(&mut self) -> Result<()>;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChannelType {
+    ExactlyOnce,
+    Broadcast,
 }
 
 /// Generic channel behavior for distributed (inter-process) channels.
@@ -40,10 +42,10 @@ trait Sender {
 /// communication. This avoids instantiating unnecessary resources when only one
 /// is needed.
 #[async_trait]
-pub trait Channel: Send + Sync + 'static {
-    type Sender<T: Serializable>: Sink<T, Error = anyhow::Error> + Send;
+pub trait Channel {
+    type Sender<T: Serializable>: Sink<T>;
     type Acker: Acker;
-    type Receiver<T: Serializable>: Stream<Item = (T, Self::Acker)> + Send + Sync;
+    type Receiver<T: Serializable>: Stream<Item = (T, Self::Acker)>;
 
     async fn close(&self) -> Result<()>;
 
@@ -54,7 +56,7 @@ pub trait Channel: Send + Sync + 'static {
     async fn receiver<T: Serializable>(&self) -> Result<Self::Receiver<T>>;
 
     /// Mark the channel for release.
-    async fn release(&self) -> Result<()>;
+    fn release(&self);
 }
 
 /// Behavior for issuing new channels and retrieving existing channels.
@@ -62,16 +64,16 @@ pub trait Channel: Send + Sync + 'static {
 /// Implementations should take care to ensure that the same channel is returned
 /// for a given identifier, allocating a new channel only when necessary.
 #[async_trait]
-pub trait ChannelFactory: Send + Sync {
+pub trait ChannelFactory {
     type Channel: Channel;
 
     /// Retrieve an existing channel. An identifier is provided when a channel
     /// is issued.
-    async fn get(&self, identifier: &str) -> Result<Self::Channel>;
+    async fn get(&self, identifier: &str, channel_type: ChannelType) -> Result<Self::Channel>;
 
     /// Issue a new channel. An identifier is returned which can be used to
     /// retrieve the channel later in some other process.
-    async fn issue(&self) -> Result<(String, Self::Channel)>;
+    async fn issue(&self, channel_type: ChannelType) -> Result<(String, Self::Channel)>;
 }
 
 /// Guard a channel and embed a particular pipe in the lease guard.
@@ -124,9 +126,7 @@ impl<C: Channel, Pipe> PinnedDrop for LeaseGuard<C, Pipe> {
     fn drop(self: Pin<&mut Self>) {
         let this = self.project();
         if let Some(channel) = this.channel.take() {
-            tokio::spawn(async move {
-                _ = channel.release().await;
-            });
+            channel.release();
         }
     }
 }

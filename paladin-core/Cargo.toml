@@ -37,6 +37,7 @@ thiserror = "1.0.50"
 backoff = { version = "0.4.0", features = ["tokio"] }
 dashmap = "5.5.3"
 bytes = "1.5.0"
+crossbeam = "0.8.2"
 
 # Local dependencies
 paladin-opkind-derive = { path = "../paladin-opkind-derive" }

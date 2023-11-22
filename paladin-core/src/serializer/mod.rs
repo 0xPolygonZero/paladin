@@ -53,8 +53,9 @@ impl<T> Serializable for T where T: Serialize + DeserializeOwned + Send + Sync +
 /// methods to serialize and deserialize data in different formats.
 /// It can be easily extended to support additional serialization formats in the
 /// future.
-#[derive(Clone, Copy, Serialize, Deserialize, Debug)]
+#[derive(Clone, Copy, Serialize, Deserialize, Debug, Default)]
 pub enum Serializer {
+    #[default]
     Cbor,
 }
 

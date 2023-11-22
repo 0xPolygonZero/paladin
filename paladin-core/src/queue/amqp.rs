@@ -7,7 +7,8 @@
 //!     serializer::Serializer,
 //!     acker::Acker,
 //!     queue::{
-//!         Queue, Connection, QueueHandle, Consumer, amqp::{AMQPQueue, AMQPQueueOptions}
+//!         Connection, QueueOptions, QueueHandle,
+//!         amqp::{AMQPConnection, AMQPConnectionOptions}
 //!     }
 //! };
 //! use serde::{Serialize, Deserialize};
@@ -21,21 +22,18 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
-//!    let amqp = AMQPQueue::new(AMQPQueueOptions {
+//!     let conn = AMQPConnection::new(AMQPConnectionOptions {
 //!         uri: "amqp://localhost:5672",
 //!         qos: Some(1),
 //!         serializer: Serializer::Cbor,
-//!     });
-//!     let conn = amqp.get_connection().await?;
-//!     let queue = conn.declare_queue("my_queue").await?;
+//!     }).await?;
+//!     let queue = conn.declare_queue("my_queue", QueueOptions::default()).await?;
 //!
 //!     // Publish a message
 //!     queue.publish(&MyStruct { field: "hello world".to_string() }).await?;
 //!
-//!     let consumer = queue.declare_consumer("my_consumer").await?;
-//!     // Stream the results
-//!     let mut stream = consumer.stream::<MyStruct>().await?;
-//!     while let Some((payload, delivery)) = stream.next().await {
+//!     let mut consumer = queue.declare_consumer::<MyStruct>("my_consumer").await?;
+//!     while let Some((payload, delivery)) = consumer.next().await {
 //!         // ...
 //!         delivery.ack().await?;
 //!         break;
@@ -53,50 +51,76 @@ use std::{
 
 use anyhow::Result;
 use async_trait::async_trait;
+use dashmap::{mapref::entry::Entry, DashMap};
 use futures::Stream;
-use lapin::{options::QueueDeleteOptions, ExchangeKind};
+use lapin::{options::QueueDeleteOptions, types::FieldTable, ExchangeKind};
 use pin_project::pin_project;
 use tracing::{error, instrument};
 
-use super::{Connection, Consumer, Queue, QueueHandle};
+use super::{
+    Connection, DeliveryMode, QueueDurability, QueueHandle, QueueOptions, SyndicationMode,
+};
 use crate::{
     acker::Acker,
     serializer::{Serializable, Serializer},
 };
 
-/// A [`Queue`] implementation for AMQP.
-///
-/// The given serializer will be threaded through to the associated
-/// [`AMQPQueueHandle`] and [`AMQPConsumer`] such that serialization /
-/// deserialization can be performed automatically.
-///
-/// ```no_run
-/// use paladin::queue::amqp::{AMQPQueue, AMQPQueueOptions};
-/// use paladin::serializer::Serializer;
-///
-/// let amqp = AMQPQueue::new(AMQPQueueOptions {
-///     uri: "amqp://localhost:5672",
-///     qos: Some(1),
-///     serializer: Serializer::Cbor,
-/// });
-/// ```
-pub struct AMQPQueue {
-    /// The AMQP URI to connect to.
-    uri: String,
-    /// The Quality of Service to use for the queue.
-    /// This determines how many unacknowledged messages the broker will deliver
-    /// to the consumer before requiring acknowledgements. By setting this,
-    /// you can control the rate at which messages are delivered to a consumer,
-    /// thus affecting throughput and ensuring that a single consumer
-    /// doesn't get overwhelmed. See <https://www.rabbitmq.com/consumer-prefetch.html>
-    qos: u16,
-    /// The AMQP channel. Will be lazily initialized upon calling
-    /// `get_connection`.
-    serializer: Serializer,
+impl DeliveryMode {
+    fn into_message_properties(self) -> lapin::BasicProperties {
+        match self {
+            DeliveryMode::Persistent => lapin::BasicProperties::default().with_delivery_mode(2),
+            DeliveryMode::Ephemeral => lapin::BasicProperties::default(),
+        }
+    }
 }
 
-/// Options for creating an [`AMQPQueue`].
-pub struct AMQPQueueOptions<'a> {
+impl QueueDurability {
+    fn into_queue_declare_options(self) -> lapin::options::QueueDeclareOptions {
+        match self {
+            QueueDurability::NonDurable => lapin::options::QueueDeclareOptions::default(),
+            QueueDurability::Durable => lapin::options::QueueDeclareOptions {
+                durable: true,
+                ..Default::default()
+            },
+        }
+    }
+
+    fn into_exchange_declare_options(self) -> lapin::options::ExchangeDeclareOptions {
+        match self {
+            QueueDurability::NonDurable => lapin::options::ExchangeDeclareOptions::default(),
+            QueueDurability::Durable => lapin::options::ExchangeDeclareOptions {
+                durable: true,
+                ..Default::default()
+            },
+        }
+    }
+}
+
+impl QueueOptions {
+    fn into_declare_arguments(self) -> FieldTable {
+        let mut arguments = FieldTable::default();
+        if let QueueDurability::NonDurable = self.durability {
+            // Auto expire non-durable queues after 30 minutes of inactivity
+            arguments.insert("x-expires".into(), 1800000.into());
+        }
+        arguments
+    }
+
+    fn into_queue_declare_options(self) -> lapin::options::QueueDeclareOptions {
+        self.durability.into_queue_declare_options()
+    }
+
+    fn into_exchange_declare_options(self) -> lapin::options::ExchangeDeclareOptions {
+        self.durability.into_exchange_declare_options()
+    }
+
+    fn into_message_properties(self) -> lapin::BasicProperties {
+        self.delivery_mode.into_message_properties()
+    }
+}
+
+/// Options for creating an [`AMQPConnection`].
+pub struct AMQPConnectionOptions<'a> {
     /// The AMQP URI to connect to.
     pub uri: &'a str,
     /// The Quality of Service to use for the queue.
@@ -109,53 +133,22 @@ pub struct AMQPQueueOptions<'a> {
     pub serializer: Serializer,
 }
 
-impl AMQPQueue {
-    pub fn new(options: AMQPQueueOptions) -> Self {
-        Self {
-            uri: options.uri.to_string(),
-            qos: options.qos.unwrap_or(1),
-            serializer: options.serializer,
-        }
-    }
-}
-
-#[async_trait]
-impl Queue for AMQPQueue {
-    type Connection = AMQPConnection;
-
-    async fn get_connection(&self) -> Result<Self::Connection> {
-        let options = lapin::ConnectionProperties::default()
-            .with_executor(tokio_executor_trait::Tokio::current())
-            .with_reactor(tokio_reactor_trait::Tokio);
-
-        let connection = lapin::Connection::connect(&self.uri, options).await?;
-        let channel = connection.create_channel().await?;
-
-        channel.basic_qos(self.qos, Default::default()).await?;
-
-        Ok(AMQPConnection {
-            channel,
-            connection: Arc::new(connection),
-            serializer: self.serializer,
-        })
-    }
-}
-
 /// A instance of a connection to an AMQP queue.
 ///
 /// # Example
 /// ```no_run
-/// use paladin::queue::{Queue, amqp::{AMQPQueue, AMQPQueueOptions}};
+/// use paladin::queue::{
+///     amqp::{AMQPConnection, AMQPConnectionOptions}
+/// };
 /// use paladin::serializer::Serializer;
 /// # use anyhow::Result;
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
-/// let amqp = AMQPQueue::new(AMQPQueueOptions {
+/// let conn = AMQPConnection::new(AMQPConnectionOptions {
 ///     uri: "amqp://localhost:5672",
 ///     qos: Some(1),
 ///     serializer: Serializer::Cbor,
-/// });
-/// let conn = amqp.get_connection().await?;
+/// }).await?;
 ///
 /// Ok(())
 /// # }
@@ -165,75 +158,58 @@ pub struct AMQPConnection {
     channel: lapin::Channel,
     connection: Arc<lapin::Connection>,
     serializer: Serializer,
+    queue_options: DashMap<String, QueueOptions>,
 }
 
-#[async_trait]
-impl Connection for AMQPConnection {
-    type QueueHandle = AMQPQueueHandle;
-    type BroadcastHandle = AMQPBroadcastHandle;
+impl AMQPConnection {
+    /// Get a handle to the connection.
+    pub async fn new(
+        AMQPConnectionOptions {
+            uri,
+            qos,
+            serializer,
+        }: AMQPConnectionOptions<'_>,
+    ) -> Result<Self> {
+        let options = lapin::ConnectionProperties::default()
+            .with_executor(tokio_executor_trait::Tokio::current())
+            .with_reactor(tokio_reactor_trait::Tokio);
 
-    /// Close the connection.
-    ///
-    /// This will also delete any queues that have been marked for deletion.
-    async fn close(&self) -> Result<()> {
-        _ = self.channel.close(200, "Goodbye").await;
-        _ = self.connection.close(200, "Goodbye").await;
+        let connection = lapin::Connection::connect(uri, options).await?;
+        let channel = connection.create_channel().await?;
 
-        Ok(())
-    }
-
-    /// Declare an AMQP queue with the given name.
-    /// ```no_run
-    /// # use paladin::{
-    ///     serializer::Serializer,
-    ///     queue::{Queue, Connection, amqp::{AMQPQueue, AMQPQueueOptions}}
-    /// };
-    /// # use anyhow::Result;
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<()> {
-    /// let amqp = AMQPQueue::new(AMQPQueueOptions {
-    ///     uri: "amqp://localhost:5672",
-    ///     qos: Some(1),
-    ///     serializer: Serializer::Cbor,
-    /// });
-    /// let conn = amqp.get_connection().await?;
-    /// let queue = conn.declare_queue("my_queue").await?;
-    ///
-    /// Ok(())
-    /// # }
-    async fn declare_queue(&self, name: &str) -> Result<Self::QueueHandle> {
-        self.channel
-            .queue_declare(name, Default::default(), Default::default())
+        channel
+            .basic_qos(qos.unwrap_or(1), Default::default())
             .await?;
 
-        Ok(AMQPQueueHandle {
-            channel: self.channel.clone(),
-            name: name.to_string(),
-            serializer: self.serializer,
+        Ok(AMQPConnection {
+            channel,
+            connection: Arc::new(connection),
+            serializer,
+            queue_options: DashMap::new(),
         })
     }
 
-    async fn delete_queue(&self, name: &str) -> Result<()> {
+    async fn declare_broadcast(
+        &self,
+        name: &str,
+        options: QueueOptions,
+    ) -> Result<<AMQPConnection as Connection>::QueueHandle> {
+        FieldTable::default().insert("x-expires".into(), 60000.into());
         self.channel
-            .queue_delete(name, QueueDeleteOptions::default())
-            .await?;
-
-        Ok(())
-    }
-
-    async fn declare_broadcast(&self, name: &str) -> Result<Self::BroadcastHandle> {
-        let _exchange = self
-            .channel
             .exchange_declare(
                 name,
                 ExchangeKind::Fanout,
-                Default::default(),
-                Default::default(),
+                options.into_exchange_declare_options(),
+                options.into_declare_arguments(),
             )
             .await?;
 
         self.channel
-            .queue_declare(name, Default::default(), Default::default())
+            .queue_declare(
+                name,
+                options.into_queue_declare_options(),
+                options.into_declare_arguments(),
+            )
             .await?;
 
         self.channel
@@ -246,10 +222,11 @@ impl Connection for AMQPConnection {
             )
             .await?;
 
-        Ok(AMQPBroadcastHandle {
+        Ok(AMQPQueueHandle {
             channel: self.channel.clone(),
             name: name.to_string(),
             serializer: self.serializer,
+            options,
         })
     }
 
@@ -264,29 +241,103 @@ impl Connection for AMQPConnection {
 
         Ok(())
     }
-}
 
-/// A handle to an AMQP broadcast channel.
-#[derive(Clone)]
-pub struct AMQPBroadcastHandle {
-    channel: lapin::Channel,
-    name: String,
-    serializer: Serializer,
+    async fn declare_single(
+        &self,
+        name: &str,
+        options: QueueOptions,
+    ) -> Result<<AMQPConnection as Connection>::QueueHandle> {
+        self.channel
+            .queue_declare(
+                name,
+                options.into_queue_declare_options(),
+                options.into_declare_arguments(),
+            )
+            .await?;
+
+        Ok(AMQPQueueHandle {
+            channel: self.channel.clone(),
+            name: name.to_string(),
+            serializer: self.serializer,
+            options,
+        })
+    }
+
+    async fn delete_single(&self, name: &str) -> Result<()> {
+        self.channel
+            .queue_delete(name, QueueDeleteOptions::default())
+            .await?;
+
+        Ok(())
+    }
 }
 
 #[async_trait]
-impl QueueHandle for AMQPBroadcastHandle {
-    type Consumer = AMQPConsumer;
+impl Connection for AMQPConnection {
+    type QueueHandle = AMQPQueueHandle;
 
-    #[instrument(skip_all, level = "trace")]
-    async fn publish<PayloadTarget: Serializable>(&self, payload: &PayloadTarget) -> Result<()> {
+    async fn close(&self) -> Result<()> {
+        _ = self.channel.close(200, "Goodbye").await;
+        _ = self.connection.close(200, "Goodbye").await;
+
+        Ok(())
+    }
+
+    /// Declare an AMQP queue with the given name.
+    ///
+    /// ```no_run
+    /// # use paladin::{
+    ///     serializer::Serializer,
+    ///     queue::{Connection, QueueOptions, amqp::{AMQPConnection, AMQPConnectionOptions}}
+    /// };
+    /// # use anyhow::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let conn = AMQPConnection::new(AMQPConnectionOptions {
+    ///     uri: "amqp://localhost:5672",
+    ///     qos: Some(1),
+    ///     serializer: Serializer::Cbor,
+    /// }).await?;
+    /// let queue = conn.declare_queue("my_queue", QueueOptions::default()).await?;
+    ///
+    /// Ok(())
+    /// # }
+    async fn declare_queue(&self, name: &str, options: QueueOptions) -> Result<Self::QueueHandle> {
+        match options.syndication_mode {
+            SyndicationMode::ExactlyOnce => self.declare_single(name, options).await,
+            SyndicationMode::Broadcast => self.declare_broadcast(name, options).await,
+        }
+    }
+
+    async fn delete_queue(&self, name: &str) -> Result<()> {
+        match self.queue_options.entry(name.to_string()) {
+            Entry::Occupied(options) => {
+                match options.get().syndication_mode {
+                    SyndicationMode::ExactlyOnce => self.delete_single(name).await?,
+                    SyndicationMode::Broadcast => self.delete_broadcast(name).await?,
+                };
+
+                options.remove();
+
+                Ok(())
+            }
+            Entry::Vacant(_) => self.delete_broadcast(name).await,
+        }
+    }
+}
+
+impl AMQPQueueHandle {
+    async fn publish_broadcast<PayloadTarget: Serializable>(
+        &self,
+        payload: &PayloadTarget,
+    ) -> Result<()> {
         self.channel
             .basic_publish(
                 &self.name,
                 "", // Routing key is ignored in fanout exchanges
                 Default::default(),
                 &self.serializer.to_bytes(payload)?,
-                lapin::BasicProperties::default().with_delivery_mode(2),
+                self.options.into_message_properties(),
             )
             .await?
             .await?;
@@ -294,14 +345,22 @@ impl QueueHandle for AMQPBroadcastHandle {
         Ok(())
     }
 
-    #[instrument(skip(self), level = "trace")]
-    async fn declare_consumer(&self, consumer_name: &str) -> Result<Self::Consumer> {
-        Ok(AMQPConsumer {
-            channel: self.channel.clone(),
-            queue_name: self.name.clone(),
-            consumer_name: consumer_name.to_string(),
-            serializer: self.serializer,
-        })
+    async fn publish_single<PayloadTarget: Serializable>(
+        &self,
+        payload: &PayloadTarget,
+    ) -> Result<()> {
+        self.channel
+            .basic_publish(
+                "",
+                &self.name,
+                Default::default(),
+                &self.serializer.to_bytes(payload)?,
+                self.options.into_message_properties(),
+            )
+            .await?
+            .await?;
+
+        Ok(())
     }
 }
 
@@ -311,11 +370,13 @@ pub struct AMQPQueueHandle {
     channel: lapin::Channel,
     name: String,
     serializer: Serializer,
+    options: QueueOptions,
 }
 
 #[async_trait]
 impl QueueHandle for AMQPQueueHandle {
-    type Consumer = AMQPConsumer;
+    type Acker = AMQPAcker;
+    type Consumer<PayloadTarget: Serializable> = AMQPConsumer<PayloadTarget>;
 
     /// Publish a message to the queue.
     ///
@@ -323,7 +384,12 @@ impl QueueHandle for AMQPQueueHandle {
     /// ```no_run
     /// use paladin::{
     ///     serializer::Serializer,
-    ///     queue::{Queue, Connection, QueueHandle, amqp::{AMQPQueue, AMQPQueueOptions}}
+    ///     queue::{
+    ///         Connection,
+    ///         QueueHandle,
+    ///         QueueOptions,
+    ///         amqp::{AMQPConnection, AMQPConnectionOptions}
+    ///     }
     /// };
     /// use serde::{Serialize, Deserialize};
     /// use anyhow::Result;
@@ -335,13 +401,12 @@ impl QueueHandle for AMQPQueueHandle {
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<()> {
-    ///    let amqp = AMQPQueue::new(AMQPQueueOptions {
+    ///     let conn = AMQPConnection::new(AMQPConnectionOptions {
     ///         uri: "amqp://localhost:5672",
     ///         qos: Some(1),
     ///         serializer: Serializer::Cbor,
-    ///     });
-    ///     let conn = amqp.get_connection().await?;
-    ///     let queue = conn.declare_queue("my_queue").await?;
+    ///     }).await?;
+    ///     let queue = conn.declare_queue("my_queue", QueueOptions::default()).await?;
     ///
     ///     let payload = MyStruct {
     ///        field: "hello world".to_string(),
@@ -353,25 +418,22 @@ impl QueueHandle for AMQPQueueHandle {
     /// }
     #[instrument(skip_all, level = "trace")]
     async fn publish<PayloadTarget: Serializable>(&self, payload: &PayloadTarget) -> Result<()> {
-        self.channel
-            .basic_publish(
-                "",
-                &self.name,
-                Default::default(),
-                &self.serializer.to_bytes(payload)?,
-                lapin::BasicProperties::default().with_delivery_mode(2),
-            )
-            .await?
-            .await?;
-
-        Ok(())
+        match self.options.syndication_mode {
+            SyndicationMode::ExactlyOnce => self.publish_single(payload).await,
+            SyndicationMode::Broadcast => self.publish_broadcast(payload).await,
+        }
     }
 
     /// Get a consumer instance to the queue.
     /// ```no_run
     /// use paladin::{
     ///     serializer::Serializer,
-    ///     queue::{Queue, Connection, QueueHandle, amqp::{AMQPQueue, AMQPQueueOptions}}
+    ///     queue::{
+    ///         Connection,
+    ///         QueueHandle,
+    ///         QueueOptions,
+    ///         amqp::{AMQPConnection, AMQPConnectionOptions}
+    ///     }
     /// };
     /// use serde::{Serialize, Deserialize};
     /// use anyhow::Result;
@@ -383,47 +445,49 @@ impl QueueHandle for AMQPQueueHandle {
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<()> {
-    ///    let amqp = AMQPQueue::new(AMQPQueueOptions {
+    ///     let conn = AMQPConnection::new(AMQPConnectionOptions {
     ///         uri: "amqp://localhost:5672",
     ///         qos: Some(1),
     ///         serializer: Serializer::Cbor,
-    ///     });
-    ///     let conn = amqp.get_connection().await?;
-    ///     let queue = conn.declare_queue("my_queue").await?;
+    ///     }).await?;
+    ///     let queue = conn.declare_queue("my_queue", QueueOptions::default()).await?;
     ///
-    ///     let consumer = queue.declare_consumer("my_consumer").await?;
+    ///     let consumer = queue.declare_consumer::<MyStruct>("my_consumer").await?;
     ///
     ///     Ok(())
     /// }
     #[instrument(skip(self), level = "trace")]
-    async fn declare_consumer(&self, consumer_name: &str) -> Result<Self::Consumer> {
+    async fn declare_consumer<PayloadTarget: Serializable>(
+        &self,
+        consumer_name: &str,
+    ) -> Result<Self::Consumer<PayloadTarget>> {
+        let consumer = self
+            .channel
+            .basic_consume(
+                &self.name,
+                consumer_name,
+                Default::default(),
+                Default::default(),
+            )
+            .await?;
+
         Ok(AMQPConsumer {
-            channel: self.channel.clone(),
-            queue_name: self.name.clone(),
-            consumer_name: consumer_name.to_string(),
+            inner: consumer,
             serializer: self.serializer,
+            _phantom: std::marker::PhantomData,
         })
     }
 }
 
-/// A consumer instance for an [`AMQPQueueHandle`].
-#[derive(Clone)]
-pub struct AMQPConsumer {
-    channel: lapin::Channel,
-    queue_name: String,
-    consumer_name: String,
-    serializer: Serializer,
-}
-
 #[pin_project]
-pub struct AMQPConsumerStream<PayloadTarget> {
+pub struct AMQPConsumer<PayloadTarget> {
     #[pin]
     inner: lapin::Consumer,
     serializer: Serializer,
     _phantom: std::marker::PhantomData<PayloadTarget>,
 }
 
-impl<PayloadTarget: Serializable> Stream for AMQPConsumerStream<PayloadTarget> {
+impl<PayloadTarget: Serializable> Stream for AMQPConsumer<PayloadTarget> {
     type Item = (PayloadTarget, AMQPAcker);
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -447,73 +511,6 @@ impl<PayloadTarget: Serializable> Stream for AMQPConsumerStream<PayloadTarget> {
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
         }
-    }
-}
-
-#[async_trait]
-impl Consumer for AMQPConsumer {
-    type Acker = AMQPAcker;
-    type Stream<PayloadTarget: Serializable> = AMQPConsumerStream<PayloadTarget>;
-
-    /// Stream the results of the consumer.
-    ///
-    /// ```no_run
-    /// use paladin::{
-    ///     serializer::Serializer,
-    ///     acker::Acker,
-    ///     queue::{Queue, Connection, QueueHandle, Consumer, amqp::{AMQPQueue, AMQPQueueOptions}}
-    /// };
-    /// use serde::{Serialize, Deserialize};
-    /// use anyhow::Result;
-    /// use futures::StreamExt;
-    ///
-    /// #[derive(Serialize, Deserialize)]
-    /// struct MyStruct {
-    ///     field: String,
-    /// }
-    ///
-    /// #[tokio::main]
-    /// async fn main() -> Result<()> {
-    ///    let amqp = AMQPQueue::new(AMQPQueueOptions {
-    ///         uri: "amqp://localhost:5672",
-    ///         qos: Some(1),
-    ///         serializer: Serializer::Cbor,
-    ///     });
-    ///     let conn = amqp.get_connection().await?;
-    ///     let queue = conn.declare_queue("my_queue").await?;
-    ///
-    ///     // Publish a message
-    ///     queue.publish(&MyStruct { field: "hello world".to_string() }).await?;
-    ///
-    ///     let consumer = queue.declare_consumer("my_consumer").await?;
-    ///     // Stream the results
-    ///     let mut stream = consumer.stream::<MyStruct>().await?;
-    ///     while let Some((payload, delivery)) = stream.next().await {
-    ///         // ...
-    ///         delivery.ack().await?;
-    ///         break;
-    ///     }
-    ///     // ...
-    ///
-    ///     Ok(())
-    /// }
-    #[instrument(skip(self), level = "trace")]
-    async fn stream<PayloadTarget: Serializable>(self) -> Result<Self::Stream<PayloadTarget>> {
-        let consumer = self
-            .channel
-            .basic_consume(
-                &self.queue_name,
-                &self.consumer_name,
-                Default::default(),
-                Default::default(),
-            )
-            .await?;
-
-        Ok(AMQPConsumerStream {
-            inner: consumer,
-            serializer: self.serializer,
-            _phantom: std::marker::PhantomData,
-        })
     }
 }
 
