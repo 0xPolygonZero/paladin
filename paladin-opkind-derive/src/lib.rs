@@ -109,9 +109,9 @@ pub fn op_kind_derive(input: TokenStream) -> TokenStream {
 
                     ::paladin::tracing::debug!("executing operation with input: {input:?}");
 
-                    let output = std::panic::catch_unwind(||
+                    let output = std::panic::catch_unwind(::std::panic::AssertUnwindSafe(||
                         op.execute(input)
-                    )
+                    ))
                     .map_err(|_| ::paladin::operation::FatalError::from_str(
                         &format!("operation panicked"),
                         ::paladin::operation::FatalStrategy::Terminate
