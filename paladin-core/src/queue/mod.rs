@@ -13,64 +13,92 @@ use futures::Stream;
 
 use crate::{acker::Acker, serializer::Serializable};
 
-#[async_trait]
-pub trait Queue {
-    /// The type of connection used to interact with the queue.
-    /// Cloning operations should use a resource pool or connection manager to
-    /// ensure cloning is cheap.
-    type Connection: Connection;
+/// The delivery mode of a message.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DeliveryMode {
+    /// A persistent message will be persisted to disk and will survive a broker
+    /// restart if the queue is durable. If the queue is non-durable, the
+    /// message message will be persisted to disk until it is delivered to a
+    /// consumer or until the broker is restarted.
+    #[default]
+    Persistent,
+    /// An ephemeral message will not be persisted to disk and will be lost if
+    /// the broker is restarted.
+    Ephemeral,
+}
 
-    /// Establish a connection to the queue.
-    async fn get_connection(&self) -> Result<Self::Connection>;
+/// The syndication mode of a queue.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SyndicationMode {
+    /// A single-delivery queue will deliver a message to a single consumer.
+    #[default]
+    ExactlyOnce,
+    /// A broadcast queue will deliver a message to all consumers.
+    Broadcast,
+}
+
+/// The durability of a queue.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum QueueDurability {
+    /// A non-durable queue will be deleted when the broker is restarted.
+    #[default]
+    NonDurable,
+    /// A durable queue will survive a broker restart.
+    Durable,
+}
+
+/// Queue declaration options.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct QueueOptions {
+    /// The message delivery mode.
+    pub delivery_mode: DeliveryMode,
+    /// The syndication mode.
+    pub syndication_mode: SyndicationMode,
+    /// The durability of the queue.
+    pub durability: QueueDurability,
 }
 
 /// A connection to a queue.
+///
 /// Connections should be cheap to clone such that references need not be passed
 /// around.
 #[async_trait]
-pub trait Connection: Send + Sync + Clone + 'static {
+pub trait Connection: Clone {
     type QueueHandle: QueueHandle;
 
     /// Close the connection.
     async fn close(&self) -> Result<()>;
 
+    /// Declare a queue.
+    ///
     /// Queue declaration should be idempotent, in that it should instantiate a
     /// queue if it does not exist, and otherwise return the existing queue.
-    async fn declare_queue(&self, name: &str) -> Result<Self::QueueHandle>;
+    async fn declare_queue(&self, name: &str, options: QueueOptions) -> Result<Self::QueueHandle>;
 
     /// Delete the queue.
     async fn delete_queue(&self, name: &str) -> Result<()>;
 }
 
 /// A handle to a queue.
+///
 /// Handles should be cheap to clone such that references need not be passed
 /// around.
 #[async_trait]
-pub trait QueueHandle: Clone + Send + Sync + Unpin + 'static {
-    type Consumer: Consumer;
+pub trait QueueHandle: Clone {
+    type Acker: Acker;
+    type Consumer<T: Serializable>: Stream<Item = (T, Self::Acker)>;
 
     /// Publish a message to the queue.
+    ///
     /// The implementation should be take care of serializing the payload before
     /// publishing.
     async fn publish<PayloadTarget: Serializable>(&self, payload: &PayloadTarget) -> Result<()>;
 
     /// Declare a queue consumer.
-    async fn declare_consumer(&self, consumer_name: &str) -> Result<Self::Consumer>;
-}
-
-/// A queue consumer instance.
-#[async_trait]
-pub trait Consumer: Clone + Send + Sync + Unpin + 'static {
-    type Acker: Acker;
-    type Stream<PayloadTarget: Serializable>: Stream<Item = (PayloadTarget, Self::Acker)>
-        + Send
-        + Sync
-        + Unpin;
-
-    /// Consume messages from the queue as a [`Stream`].
-    /// The implementation should take care of deserializing the payload before
-    /// yielding it.
-    async fn stream<PayloadTarget: Serializable>(self) -> Result<Self::Stream<PayloadTarget>>;
+    async fn declare_consumer<PayloadTarget: Serializable>(
+        &self,
+        consumer_name: &str,
+    ) -> Result<Self::Consumer<PayloadTarget>>;
 }
 
 pub mod amqp;

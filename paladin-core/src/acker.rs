@@ -67,6 +67,8 @@
 //! # Ok(())
 //! # }
 //! ```
+use std::sync::Arc;
+
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::TryFutureExt;
@@ -89,6 +91,18 @@ pub trait Acker: Send + Sync + 'static {
 /// dispatched types.
 #[async_trait]
 impl<T: Acker + ?Sized> Acker for Box<T> {
+    async fn ack(&self) -> Result<()> {
+        (**self).ack().await
+    }
+
+    async fn nack(&self) -> Result<()> {
+        (**self).nack().await
+    }
+}
+
+/// Provides an implementation of the `Acker` trait for `Arc` types.
+#[async_trait]
+impl<T: Acker + ?Sized> Acker for Arc<T> {
     async fn ack(&self) -> Result<()> {
         (**self).ack().await
     }

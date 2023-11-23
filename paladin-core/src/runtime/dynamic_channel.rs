@@ -18,13 +18,12 @@ use crate::{
     acker::Acker,
     channel::{
         queue::{QueueChannel, QueueChannelFactory},
-        Channel, ChannelFactory,
+        Channel, ChannelFactory, ChannelType,
     },
     config::{self, Config},
     queue::{
-        amqp::{AMQPConnection, AMQPQueue, AMQPQueueOptions},
-        in_memory::{InMemoryConnection, InMemoryQueue},
-        Queue,
+        amqp::{AMQPConnection, AMQPConnectionOptions},
+        in_memory::InMemoryConnection,
     },
     serializer::{Serializable, Serializer},
 };
@@ -72,17 +71,15 @@ impl Channel for DynamicChannel {
         }
     }
 
-    async fn release(&self) -> Result<()> {
+    fn release(&self) {
         match self {
             Self::Amqp(channel) => {
-                channel.release().await?;
+                channel.release();
             }
             Self::InMemory(channel) => {
-                channel.release().await?;
+                channel.release();
             }
         }
-
-        Ok(())
     }
 }
 
@@ -98,21 +95,25 @@ pub enum DynamicChannelFactory {
 impl ChannelFactory for DynamicChannelFactory {
     type Channel = DynamicChannel;
 
-    async fn get(&self, identifier: &str) -> Result<DynamicChannel> {
+    async fn get(&self, identifier: &str, channel_type: ChannelType) -> Result<DynamicChannel> {
         match self {
-            Self::Amqp(factory) => Ok(DynamicChannel::Amqp(factory.get(identifier).await?)),
-            Self::InMemory(factory) => Ok(DynamicChannel::InMemory(factory.get(identifier).await?)),
+            Self::Amqp(factory) => Ok(DynamicChannel::Amqp(
+                factory.get(identifier, channel_type).await?,
+            )),
+            Self::InMemory(factory) => Ok(DynamicChannel::InMemory(
+                factory.get(identifier, channel_type).await?,
+            )),
         }
     }
 
-    async fn issue(&self) -> Result<(String, DynamicChannel)> {
+    async fn issue(&self, channel_type: ChannelType) -> Result<(String, DynamicChannel)> {
         match self {
             Self::Amqp(factory) => {
-                let (identifier, channel) = factory.issue().await?;
+                let (identifier, channel) = factory.issue(channel_type).await?;
                 Ok((identifier, DynamicChannel::Amqp(channel)))
             }
             Self::InMemory(factory) => {
-                let (identifier, channel) = factory.issue().await?;
+                let (identifier, channel) = factory.issue(channel_type).await?;
                 Ok((identifier, DynamicChannel::InMemory(channel)))
             }
         }
@@ -124,22 +125,18 @@ impl DynamicChannelFactory {
         let serializer = Serializer::from(config);
         match config.runtime {
             config::Runtime::Amqp => {
-                let queue = AMQPQueue::new(AMQPQueueOptions {
+                let connection = AMQPConnection::new(AMQPConnectionOptions {
                     uri: config.amqp_uri.as_ref().expect("amqp_uri is required"),
                     qos: Some(1),
                     serializer,
-                });
-                let channel_factory = QueueChannelFactory::new(
-                    queue
-                        .get_connection()
-                        .await
-                        .context("connecting to AMQP host")?,
-                );
+                })
+                .await
+                .context("connecting to AMQP host")?;
+                let channel_factory = QueueChannelFactory::new(connection);
                 Ok(DynamicChannelFactory::Amqp(channel_factory))
             }
             config::Runtime::InMemory => {
-                let queue = InMemoryQueue::new(serializer);
-                let channel_factory = QueueChannelFactory::new(queue.get_connection().await?);
+                let channel_factory = QueueChannelFactory::new(InMemoryConnection::new(serializer));
                 Ok(DynamicChannelFactory::InMemory(channel_factory))
             }
         }

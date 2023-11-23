@@ -28,7 +28,7 @@ pub struct Config {
     pub task_bus_routing_key: String,
 
     /// Determines the serialization format to be used.
-    #[arg(long, short, value_enum, default_value_t = Serializer::Cbor)]
+    #[arg(long, short, value_enum, default_value_t = Serializer::Postcard)]
     pub serializer: Serializer,
 
     /// Specifies the runtime environment to use.
@@ -49,6 +49,7 @@ pub struct Config {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, ValueEnum, Default)]
 pub enum Serializer {
     #[default]
+    Postcard,
     Cbor,
 }
 

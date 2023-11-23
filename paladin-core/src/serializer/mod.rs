@@ -53,14 +53,17 @@ impl<T> Serializable for T where T: Serialize + DeserializeOwned + Send + Sync +
 /// methods to serialize and deserialize data in different formats.
 /// It can be easily extended to support additional serialization formats in the
 /// future.
-#[derive(Clone, Copy, Serialize, Deserialize, Debug)]
+#[derive(Clone, Copy, Serialize, Deserialize, Debug, Default)]
 pub enum Serializer {
+    #[default]
+    Postcard,
     Cbor,
 }
 
 impl std::fmt::Display for Serializer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Postcard => write!(f, "postcard"),
             Self::Cbor => write!(f, "cbor"),
         }
     }
@@ -71,6 +74,7 @@ impl Serializer {
     #[instrument(skip(value), level = "trace")]
     pub fn to_bytes<T: Serialize>(&self, value: &T) -> Result<Vec<u8>> {
         match self {
+            Self::Postcard => Ok(postcard::to_allocvec(value)?),
             Self::Cbor => {
                 let mut result = Vec::new();
                 ciborium::into_writer(value, &mut result)?;
@@ -84,6 +88,7 @@ impl Serializer {
     #[instrument(skip(bytes), level = "trace")]
     pub fn from_bytes<T: for<'a> Deserialize<'a>>(&self, bytes: &[u8]) -> Result<T> {
         match self {
+            Self::Postcard => Ok(postcard::from_bytes(bytes)?),
             Self::Cbor => Ok(ciborium::from_reader(bytes)?),
         }
     }
@@ -92,6 +97,7 @@ impl Serializer {
 impl From<&Config> for Serializer {
     fn from(config: &Config) -> Self {
         match config.serializer {
+            config::Serializer::Postcard => Self::Postcard,
             config::Serializer::Cbor => Self::Cbor,
         }
     }
