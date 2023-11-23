@@ -214,7 +214,7 @@
 
 use std::fmt::Debug;
 
-use crate::serializer::Serializable;
+use crate::serializer::{Serializable, Serializer};
 
 /// An operation that can be performed by a worker.
 ///
@@ -230,6 +230,35 @@ pub trait Operation: Serializable + Clone + Debug + Into<Self::Kind> {
 
     /// Execute the operation on the given input.
     fn execute(&self, input: Self::Input) -> Result<Self::Output>;
+
+    /// Get the input from a byte representation.
+    fn input_from_bytes(&self, serializer: Serializer, input: &[u8]) -> Result<Self::Input> {
+        Ok(serializer
+            .from_bytes(input)
+            .map_err(|err| FatalError::from_anyhow(err, Default::default()))?)
+    }
+
+    /// Get a byte representation of the output.
+    fn output_to_bytes(&self, serializer: Serializer, output: Self::Output) -> Result<Vec<u8>> {
+        Ok(serializer
+            .to_bytes(&output)
+            .map_err(|err| FatalError::from_anyhow(err, Default::default()))?)
+    }
+
+    /// Execute the operation on the given input as bytes.
+    fn execute_as_bytes(&self, serializer: Serializer, input: &[u8]) -> Result<Vec<u8>> {
+        self.input_from_bytes(serializer, input)
+            .and_then(|input| self.execute(input))
+            .and_then(|output| self.output_to_bytes(serializer, output))
+    }
+
+    /// Get a byte representation of the operation.
+    fn as_bytes(&self, serializer: Serializer) -> Result<Vec<u8>> {
+        let output = serializer
+            .to_bytes(self)
+            .map_err(|err| FatalError::from_anyhow(err, Default::default()))?;
+        Ok(output)
+    }
 }
 
 /// A registry of all available operations.

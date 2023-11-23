@@ -14,7 +14,7 @@ use std::{num::NonZeroU32, time::Duration};
 
 use futures::Future;
 use thiserror::Error;
-use tracing::{error, warn};
+use tracing::error;
 
 /// A retry strategy for handling transient errors.
 ///
@@ -31,7 +31,7 @@ use tracing::{error, warn};
 /// - `After`: Retry the operation after a specified duration.
 /// - `Exponential`: Retry the operation with the provided exponential backoff.
 ///   This strategy is only available when the `backoff` feature is enabled.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum RetryStrategy {
     /// Retry the operation immediately.
     Immediate { max_retries: NonZeroU32 },
@@ -55,15 +55,50 @@ impl Default for RetryStrategy {
     }
 }
 
+type DynTracer<E> = Box<dyn Fn(E) + Send + Sync>;
+
 impl RetryStrategy {
     /// Retry the operation according to the strategy.
-    pub async fn retry<O, E, Fut, F>(&self, f: F) -> std::result::Result<O, E>
+    pub async fn retry<O, E, Fut, F>(self, f: F) -> std::result::Result<O, E>
     where
         E: std::fmt::Debug,
         Fut: Future<Output = std::result::Result<O, E>>,
         F: Fn() -> Fut,
     {
-        retry_with_strategy(f, self).await
+        retry_with_strategy(f, self, None as Option<DynTracer<E>>).await
+    }
+
+    pub async fn retry_trace<O, E, Fut, F, T>(self, f: F, tracer: T) -> std::result::Result<O, E>
+    where
+        E: std::fmt::Debug,
+        Fut: Future<Output = std::result::Result<O, E>>,
+        F: Fn() -> Fut,
+        T: Fn(E),
+    {
+        retry_with_strategy(f, self, Some(tracer)).await
+    }
+
+    pub fn into_backoff(self) -> anyhow::Result<backoff::ExponentialBackoff> {
+        match self {
+            Self::Exponential {
+                min_duration,
+                max_duration,
+            } => {
+                let mut backoff = backoff::ExponentialBackoffBuilder::new();
+                backoff.with_initial_interval(min_duration);
+                backoff.with_max_elapsed_time(Some(max_duration));
+                Ok(backoff.build())
+            }
+            _ => anyhow::bail!("retry strategy is not exponential"),
+        }
+    }
+}
+
+impl TryFrom<RetryStrategy> for backoff::ExponentialBackoff {
+    type Error = anyhow::Error;
+
+    fn try_from(value: RetryStrategy) -> anyhow::Result<Self, Self::Error> {
+        value.into_backoff()
     }
 }
 
@@ -88,7 +123,7 @@ impl RetryStrategy {
 ///   the operation to return an error.
 /// - `Ignore`: Ignore the error and continue with the rest of the directive
 ///   chain.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub enum FatalStrategy {
     /// Terminate the entire distributed program.
     #[default]
@@ -153,7 +188,7 @@ pub enum FatalStrategy {
 ///         .into_values_sorted().await
 ///         .map(|values| values.into_iter().collect::<Vec<_>>());
 ///
-///     assert_eq!(result.unwrap_err().to_string(), "This operation will always fail.");
+///     assert_eq!(result.unwrap_err().to_string(), "Fatal operation error: This operation will always fail.");
 /// # Ok(())
 /// }
 /// ```
@@ -200,7 +235,7 @@ pub enum FatalStrategy {
 ///     let computation = IndexedStream::from([1, 2, 3]).fold(WillFail);
 ///     let result = computation.run(&runtime).await;
 ///
-///     assert_eq!(result.unwrap_err().to_string(), "This operation will always fail.");
+///     assert_eq!(result.unwrap_err().to_string(), "Fatal operation error: This operation will always fail.");
 /// # Ok(())
 /// }
 /// ```
@@ -408,6 +443,59 @@ pub enum OperationError {
 }
 
 impl OperationError {
+    async fn retry_internal<O, Fut, F, T>(self, f: F, tracer: Option<T>) -> Result<O>
+    where
+        Fut: Future<Output = Result<O>>,
+        F: Fn() -> Fut,
+        T: Fn(OperationError),
+    {
+        match self {
+            Self::Transient {
+                retry_strategy,
+                fatal_strategy,
+                ..
+            } => {
+                let result = retry_with_strategy(f, retry_strategy, tracer).await;
+                result.map_err(|err| Self::Fatal {
+                    err: err.into_err(),
+                    strategy: fatal_strategy,
+                })
+            }
+            _ => Err(self),
+        }
+    }
+
+    /// Retry the operation according to the strategy.
+    ///
+    /// If the error is not a transient error, it is returned unchanged.
+    /// If the error is a transient error, it is retried according to the
+    /// provided strategy, and if the retry policy is exhausted, the error is
+    /// converted into a fatal error.
+    pub async fn retry<O, Fut, F>(self, f: F) -> Result<O>
+    where
+        Fut: Future<Output = Result<O>>,
+        F: Fn() -> Fut,
+    {
+        self.retry_internal(f, None as Option<DynTracer<OperationError>>)
+            .await
+    }
+
+    /// Retry the operation according to the strategy and the provided tracer.
+    ///
+    /// If the error is not a transient error, it is returned unchanged.
+    /// If the error is a transient error, it is retried according to the
+    /// provided strategy, and if the retry policy is exhausted, the error is
+    /// converted into a fatal error.
+    pub async fn retry_trace<O, Fut, F, T>(self, f: F, tracer: T) -> Result<O>
+    where
+        Fut: Future<Output = Result<O>>,
+        F: Fn() -> Fut,
+        T: Fn(OperationError),
+    {
+        self.retry_internal(f, Some(tracer)).await
+    }
+
+    /// Extract the underlying error.
     pub fn into_err(self) -> anyhow::Error {
         match self {
             Self::Transient { err, .. } => err,
@@ -415,6 +503,7 @@ impl OperationError {
         }
     }
 
+    /// Extract the underlying error as a reference.
     pub fn as_err(&self) -> &anyhow::Error {
         match self {
             Self::Transient { err, .. } => err,
@@ -422,6 +511,9 @@ impl OperationError {
         }
     }
 
+    /// Convert an error into a fatal error.
+    ///
+    /// If the error is already a fatal error, it is returned unchanged.
     pub fn into_fatal(self) -> Self {
         match self {
             Self::Transient {
@@ -433,6 +525,13 @@ impl OperationError {
                 strategy: fatal_strategy,
             },
             _ => self,
+        }
+    }
+
+    pub fn fatal_strategy(&self) -> FatalStrategy {
+        match self {
+            Self::Transient { fatal_strategy, .. } => *fatal_strategy,
+            Self::Fatal { strategy, .. } => *strategy,
         }
     }
 }
@@ -575,71 +674,71 @@ impl<T> From<FatalError> for Result<T> {
 
 pub type Result<T> = std::result::Result<T, OperationError>;
 
-/// Retries a future with the provided [`RetryStrategy`].
-pub async fn retry_with_strategy<O, E, Fut, F>(
+/// Retries a future with the given maximum number of retries and duration.
+async fn retry_simple<O, E, Fut, F, T>(
     f: F,
-    strategy: &RetryStrategy,
+    max_retries: NonZeroU32,
+    duration: Option<Duration>,
+    tracer: Option<T>,
 ) -> std::result::Result<O, E>
 where
     E: std::fmt::Debug,
     Fut: Future<Output = std::result::Result<O, E>>,
     F: Fn() -> Fut,
+    T: Fn(E),
 {
-    async fn retry_simple<O, E, Fut, F>(
-        f: F,
-        max_retries: NonZeroU32,
-        duration: Option<Duration>,
-    ) -> std::result::Result<O, E>
-    where
-        E: std::fmt::Debug,
-        Fut: Future<Output = std::result::Result<O, E>>,
-        F: Fn() -> Fut,
-    {
-        let mut num_retries = 0;
-        let mut result = f().await;
-        while let Err(err) = result {
-            if num_retries >= max_retries.get() {
-                error!("Max retries exceeded for transient error: {err:?}");
-                return Err(err);
-            }
-            warn!("Encountered transient error: {err:?}");
-            num_retries += 1;
-            if let Some(duration) = duration {
-                tokio::time::sleep(duration).await;
-            }
-            result = f().await;
+    let mut num_retries = 0;
+    let mut result = f().await;
+    while let Err(err) = result {
+        if num_retries >= max_retries.get() {
+            return Err(err);
         }
-        Ok(result.unwrap())
+        if let Some(tracer) = tracer.as_ref() {
+            tracer(err);
+        }
+        num_retries += 1;
+        if let Some(duration) = duration {
+            tokio::time::sleep(duration).await;
+        }
+        result = f().await;
     }
+    Ok(result.unwrap())
+}
 
+/// Retries a future with the provided [`RetryStrategy`].
+async fn retry_with_strategy<O, E, Fut, F, T>(
+    f: F,
+    strategy: RetryStrategy,
+    tracer: Option<T>,
+) -> std::result::Result<O, E>
+where
+    E: std::fmt::Debug,
+    Fut: Future<Output = std::result::Result<O, E>>,
+    F: Fn() -> Fut,
+    T: Fn(E),
+{
     match strategy {
-        RetryStrategy::Immediate { max_retries } => retry_simple(f, *max_retries, None).await,
+        RetryStrategy::Immediate { max_retries } => {
+            retry_simple(f, max_retries, None, tracer).await
+        }
 
         RetryStrategy::After {
             max_retries,
             duration,
-        } => retry_simple(f, *max_retries, Some(*duration)).await,
+        } => retry_simple(f, max_retries, Some(duration), tracer).await,
 
-        RetryStrategy::Exponential {
-            min_duration,
-            max_duration,
-        } => {
-            let mut backoff = backoff::ExponentialBackoffBuilder::new();
-            backoff.with_initial_interval(*min_duration);
-            backoff.with_max_elapsed_time(Some(*max_duration));
-            let backoff = backoff.build();
+        exp @ RetryStrategy::Exponential { .. } => {
+            let backoff = exp.into_backoff().unwrap();
             let result = backoff::future::retry_notify(
                 backoff,
                 || async { Ok(f().await?) },
                 |err, _| {
-                    warn!("Encountered transient error: {err:?}");
+                    if let Some(t) = tracer.as_ref() {
+                        t(err)
+                    }
                 },
             )
-            .await
-            .map_err(|err| {
-                error!("Max retries exceeded for transient error: {err:?}");
-                err
-            })?;
+            .await?;
 
             Ok(result)
         }

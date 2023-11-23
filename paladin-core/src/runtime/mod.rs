@@ -48,10 +48,17 @@
 //! communicate, and provides a simple interface for interacting with these
 //! channels.
 
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
 use anyhow::Result;
-use futures::{Sink, SinkExt, Stream, StreamExt};
-use tokio::{task::JoinHandle, try_join};
-use tracing::{debug_span, error, instrument, warn, Instrument};
+use dashmap::{mapref::entry::Entry, DashMap};
+use futures::{stream::BoxStream, Sink, SinkExt, Stream, StreamExt};
+use serde::{Deserialize, Serialize};
+use tokio::{select, task::JoinHandle, try_join};
+use tracing::{debug_span, error, instrument, trace, warn, Instrument};
 
 use self::dynamic_channel::{DynamicChannel, DynamicChannelFactory};
 use crate::{
@@ -60,7 +67,7 @@ use crate::{
         coordinated_channel::coordinated_channel, Channel, ChannelFactory, ChannelType, LeaseGuard,
     },
     config::Config,
-    operation::{FatalStrategy, OpKind, Operation, OperationError},
+    operation::{FatalStrategy, OpKind, Operation},
     serializer::{Serializable, Serializer},
     task::{AnyTask, AnyTaskOutput, AnyTaskResult, RemoteExecute, Task, TaskResult},
 };
@@ -374,6 +381,7 @@ impl Drop for Runtime {
 /// 1. Listen for new [`Task`]s.
 /// 2. Execute those [`Task`]s.
 /// 3. Send back the results of a [`Task`] execution.
+#[derive(Clone)]
 pub struct WorkerRuntime<Kind: OpKind> {
     channel_factory: DynamicChannelFactory,
     task_channel: DynamicChannel,
@@ -381,18 +389,22 @@ pub struct WorkerRuntime<Kind: OpKind> {
 }
 
 #[derive(Debug)]
-pub struct ExecutionOk<'a, A> {
+pub struct ExecutionOk<'a> {
     pub routing_key: &'a str,
     pub output: AnyTaskOutput,
-    pub acker: A,
 }
 
 #[derive(Debug)]
-pub struct ExecutionErr<'a, A, E> {
+pub struct ExecutionErr<'a, E> {
     routing_key: &'a str,
     err: E,
     strategy: FatalStrategy,
-    acker: A,
+}
+
+/// Inter-process messages between workers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum WorkerIpc {
+    ExecutionError { routing_key: String },
 }
 
 impl<Kind: OpKind> WorkerRuntime<Kind>
@@ -428,6 +440,46 @@ where
             .await?
             .sender()
             .await
+    }
+
+    /// The routing key used for broadcasting [`WorkerIpc`]s.
+    #[inline]
+    fn broadcast_ipc_routing_key() -> &'static str {
+        "internal.ipc.broadcast"
+    }
+
+    /// Get a [`Sink`] for dispatching [`WorkerIpc`] messages.
+    ///
+    /// Typically used by a worker node to notify other workers of a fatal
+    /// error.
+    #[instrument(skip(self), level = "trace")]
+    pub async fn get_ipc_sender(&self) -> Result<Sender<WorkerIpc>> {
+        self.channel_factory
+            .get(Self::broadcast_ipc_routing_key(), ChannelType::Broadcast)
+            .await?
+            .sender()
+            .await
+    }
+
+    /// Get a [`Stream`] for receiving [`WorkerIpc`] messages.
+    ///
+    /// Typically used by a worker node to listen for fatal errors from other
+    /// workers.
+    #[instrument(skip(self), level = "trace")]
+    pub async fn get_ipc_receiver(&self) -> Result<BoxStream<WorkerIpc>> {
+        let s = self
+            .channel_factory
+            .get(Self::broadcast_ipc_routing_key(), ChannelType::Broadcast)
+            .await?
+            .receiver::<WorkerIpc>()
+            .await?;
+
+        Ok(s.then(|(message, acker)| async move {
+            // auto-ack
+            _ = acker.ack().await;
+            message
+        })
+        .boxed())
     }
 
     /// Provides a [`Stream`] incoming [`AnyTask`]s.
@@ -484,36 +536,45 @@ where
     /// #  Ok(())
     /// }
     /// ```
-    #[instrument(skip_all, level = "debug")]
+    #[instrument(skip_all, level = "trace")]
     pub async fn get_task_receiver(&self) -> Result<Receiver<AnyTask<Kind>>> {
         self.task_channel.receiver().await
     }
 
     /// Notify the [`Runtime`] of a fatal error.
     ///
-    /// This will pass the error back to the consumer of the [`Task`]
-    /// and nack the message.
-    pub async fn dispatch_fatal<'a, A, E>(
+    /// This will pass the error back to the consumer of the [`Task`] and notify
+    /// other workers of the error.
+    #[instrument(skip(self), level = "trace")]
+    pub async fn dispatch_fatal<'a, E>(
         &self,
         ExecutionErr {
             routing_key,
             err,
             strategy,
-            acker,
-        }: ExecutionErr<'a, A, E>,
+        }: ExecutionErr<'a, E>,
     ) -> Result<()>
     where
-        A: Acker,
         E: std::fmt::Display + std::fmt::Debug,
     {
-        error!("Encountered fatal error: {err}");
-        let mut sender = self.get_result_sender(routing_key).await?;
-        sender.send(AnyTaskResult::Err(err.to_string())).await?;
-        acker.nack().await?;
         match strategy {
             FatalStrategy::Ignore => Ok(()),
-            // TODO: Signal to all other workers in the directive chain to terminate.
-            FatalStrategy::Terminate => Ok(()),
+            FatalStrategy::Terminate => {
+                // Notify other workers of the error.
+                let (mut ipc, mut sender) =
+                    try_join!(self.get_ipc_sender(), self.get_result_sender(routing_key))?;
+
+                try_join!(
+                    ipc.send(WorkerIpc::ExecutionError {
+                        routing_key: routing_key.to_string()
+                    }),
+                    sender.send(AnyTaskResult::Err(err.to_string()))
+                )?;
+
+                try_join!(ipc.close(), sender.close())?;
+
+                Ok(())
+            }
         }
     }
 
@@ -521,98 +582,18 @@ where
     ///
     /// This will pass the output back to the consumer of the [`Task`]
     /// and ack the message.
-    pub async fn dispatch_ok<'a, A>(
+    #[instrument(skip(self), level = "trace")]
+    pub async fn dispatch_ok<'a>(
         &self,
         ExecutionOk {
             routing_key,
             output,
-            acker,
-        }: ExecutionOk<'a, A>,
-    ) -> Result<()>
-    where
-        A: Acker,
-    {
+        }: ExecutionOk<'a>,
+    ) -> Result<()> {
         let mut sender = self.get_result_sender(routing_key).await?;
         sender.send(AnyTaskResult::Ok(output)).await?;
         sender.close().await?;
-        acker.ack().await?;
         Ok(())
-    }
-
-    /// Executes a [`Task`] remotely.
-    ///
-    /// This is the primary entry point for executing [`Task`]s. It is used
-    /// internally by the [`main_loop`](Self::main_loop) function, but can also
-    /// be used directly if the caller needs more control over the execution
-    /// process.
-    ///
-    /// In summary, this function:
-    /// 1. Executes the [`Task`].
-    /// 2. Retries the [`Task`] if it fails with a transient error.
-    /// 3. Terminates the [`Task`] if it fails with a fatal error.
-    /// 4. Terminates the [`Task`] if it fails with a transient error and the
-    ///    retry strategy is exhausted.
-    /// 5. Dispatches the result back to the consumer of the [`Task`].
-    pub async fn remote_execute<A>(&self, payload: AnyTask<Kind>, acker: A) -> Result<()>
-    where
-        A: Acker,
-    {
-        let get_result = || {
-            payload
-                .remote_execute(self)
-                .instrument(debug_span!("remote_execute", routing_key = %payload.routing_key, op = ?payload.op_kind))
-        };
-
-        match get_result().await {
-            Ok(output) => {
-                self.dispatch_ok(ExecutionOk {
-                    routing_key: &payload.routing_key,
-                    output,
-                    acker,
-                })
-                .await
-            }
-
-            Err(err) => match err {
-                OperationError::Fatal { err, strategy } => {
-                    self.dispatch_fatal(ExecutionErr {
-                        routing_key: &payload.routing_key,
-                        err,
-                        strategy,
-                        acker,
-                    })
-                    .await
-                }
-                OperationError::Transient {
-                    err,
-                    retry_strategy,
-                    fatal_strategy,
-                } => {
-                    warn!("Encountered transient error: {err:?}");
-                    let result = retry_strategy.retry(get_result).await;
-                    match result {
-                        Ok(output) => {
-                            self.dispatch_ok(ExecutionOk {
-                                routing_key: &payload.routing_key,
-                                output,
-                                acker,
-                            })
-                            .await
-                        }
-
-                        Err(err) => {
-                            self.dispatch_fatal(ExecutionErr {
-                                routing_key: &payload.routing_key,
-                                err: err.into_fatal(),
-                                strategy: fatal_strategy,
-                                acker,
-                            })
-                            .await
-                        }
-                    }
-                }
-            },
-        }
     }
 
     /// A default worker loop that can be used to process
@@ -668,12 +649,158 @@ where
     ///     Ok(())
     /// }
     /// ```
+    #[instrument(skip(self), level = "trace")]
     pub async fn main_loop(&self) -> Result<()> {
         let mut task_stream = self.get_task_receiver().await?;
 
-        while let Some((payload, acker)) = task_stream.next().await {
-            _ = self.remote_execute(payload, acker).await;
+        const TERMINATION_CLEAR_INTERVAL: Duration = Duration::from_secs(60);
+        // Keep track of terminated jobs to avoid processing new tasks associated to
+        // them.
+        let terminated_jobs: Arc<DashMap<String, Instant>> = Default::default();
+
+        // Spawn a task that will periodically clear the terminated jobs map.
+        let reaper = tokio::spawn({
+            let terminated_jobs = terminated_jobs.clone();
+            async move {
+                loop {
+                    terminated_jobs.retain(|_, v| v.elapsed() < TERMINATION_CLEAR_INTERVAL);
+                    tokio::time::sleep(TERMINATION_CLEAR_INTERVAL).await;
+                }
+            }
+        });
+
+        // Create a watch channel for signaling IPC changes while processing a task.
+        let (ipc_sig_term_tx, ipc_sig_term_rx) =
+            tokio::sync::watch::channel::<String>("dummy".to_string());
+
+        // Spawn a task that will listen for IPC termination signals and mark
+        // jobs as terminated.
+        let remote_ipc_sig_term_handler = tokio::spawn({
+            let terminated_jobs = terminated_jobs.clone();
+            let rt = self.clone();
+
+            async move {
+                let mut ipc_receiver = rt
+                    .get_ipc_receiver()
+                    .await
+                    .expect("failed to get IPC receiver");
+
+                while let Some(ipc) = ipc_receiver.next().await {
+                    match ipc {
+                        WorkerIpc::ExecutionError { routing_key } => {
+                            // Mark the job as terminated if it hasn't been already.
+                            if mark_terminated(&terminated_jobs, &routing_key) {
+                                warn!(routing_key = %routing_key, "received IPC termination signal");
+                                // Notify any currently executing tasks of the error.
+                                ipc_sig_term_tx.send_replace(routing_key);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        /// Helper to mark a job as terminated.
+        ///
+        /// Returns `true` if the job was marked as terminated, `false`
+        /// otherwise (i.e., it was already marked terminated).
+        #[inline]
+        fn mark_terminated(terminated_jobs: &DashMap<String, Instant>, routing_key: &str) -> bool {
+            if let Entry::Vacant(entry) = terminated_jobs.entry(routing_key.to_string()) {
+                entry.insert(Instant::now());
+                return true;
+            }
+            false
         }
+
+        while let Some((payload, acker)) = task_stream.next().await {
+            // Skip tasks associated with terminated jobs.
+            if terminated_jobs.contains_key(&payload.routing_key) {
+                trace!(routing_key = %payload.routing_key, "skipping terminated job");
+                acker.nack().await?;
+
+                continue;
+            }
+
+            let routing_key = payload.routing_key.clone();
+
+            // Spawn a task that will execute the task.
+            let execution_task = tokio::spawn({
+                let rt = self.clone();
+                async move {
+                    payload.remote_execute(&rt)
+                        .instrument(debug_span!("remote_execute", routing_key = %payload.routing_key, op = ?payload.op_kind))
+                        .await
+                }
+            });
+
+            // Create a future that will wait for an IPC termination signal.
+            let ipc_sig_term = {
+                let mut ipc_sig_term_rx = ipc_sig_term_rx.clone();
+                let routing_key = routing_key.clone();
+                async move {
+                    loop {
+                        ipc_sig_term_rx.changed().await.expect("IPC channel closed");
+                        if *ipc_sig_term_rx.borrow() == routing_key {
+                            return true;
+                        }
+                    }
+                }
+            };
+
+            // Wait for either the task to complete or an IPC termination signal.
+            select! {
+                execution = execution_task => {
+                    match execution {
+                        Ok(Ok(output)) => {
+                            try_join!(
+                                acker.ack(),
+                                self.dispatch_ok(ExecutionOk {
+                                    routing_key: &routing_key,
+                                    output,
+                                })
+                            )?;
+                        }
+                        // Task execution failed
+                        Ok(Err(err)) => {
+                            error!(routing_key = %routing_key, "execution error: {err:?}");
+                            mark_terminated(&terminated_jobs, &routing_key);
+
+                            try_join!(
+                                acker.nack(),
+                                self.dispatch_fatal(ExecutionErr {
+                                    routing_key: &routing_key,
+                                    strategy: err.fatal_strategy(),
+                                    err,
+                                })
+                            )?;
+                        }
+                        // Thread panicked
+                        Err(err) => {
+                            error!(routing_key = %routing_key, "thread panic: {err:?}");
+                            mark_terminated(&terminated_jobs, &routing_key);
+
+                            try_join!(
+                                acker.nack(),
+                                self.dispatch_fatal(ExecutionErr {
+                                    routing_key: &routing_key,
+                                    strategy: FatalStrategy::Terminate,
+                                    err,
+                                })
+                            )?;
+                        }
+                    }
+
+                }
+                _ = ipc_sig_term => {
+                    warn!(routing_key = %routing_key, "task cancelled via IPC sigterm");
+                    _ = acker.nack().await;
+                }
+            }
+        }
+
+        remote_ipc_sig_term_handler.abort();
+        reaper.abort();
 
         Ok(())
     }

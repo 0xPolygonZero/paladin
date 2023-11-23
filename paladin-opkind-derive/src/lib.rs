@@ -105,32 +105,22 @@ pub fn op_kind_derive(input: TokenStream) -> TokenStream {
         .map(|(variant_name, _, _)| {
             quote! {
                 #name::#variant_name(ref op) => {
-                    let input = self.serializer
-                        .from_bytes(&self.input)
-                        .map_err(|err| ::paladin::operation::FatalError::from_anyhow(
-                            err,
-                            ::paladin::operation::FatalStrategy::Terminate
-                        ))?;
+                    let input = op.input_from_bytes(self.serializer, &self.input)?;
 
-                    ::paladin::tracing::debug!("executing operation with input: {:?}", input);
+                    ::paladin::tracing::debug!("executing operation with input: {input:?}");
 
-                    let output = op.execute(input)?;
+                    let output = std::panic::catch_unwind(||
+                        op.execute(input)
+                    )
+                    .map_err(|_| ::paladin::operation::FatalError::from_str(
+                        &format!("operation panicked"),
+                        ::paladin::operation::FatalStrategy::Terminate
+                    ))??;
 
                     ::paladin::tracing::debug!("operation executed successfully: {:?}", output);
 
-                    let serialized_output = self.serializer
-                        .to_bytes(&output)
-                        .map_err(|err| ::paladin::operation::FatalError::from_anyhow(
-                            err,
-                            ::paladin::operation::FatalStrategy::Terminate
-                        ))?;
-
-                    let serialized_op = self.serializer
-                        .to_bytes(&op)
-                        .map_err(|err| ::paladin::operation::FatalError::from_anyhow(
-                            err,
-                            ::paladin::operation::FatalStrategy::Terminate
-                        ))?;
+                    let serialized_output = op.output_to_bytes(self.serializer, output)?;
+                    let serialized_op = op.as_bytes(self.serializer)?;
 
                     let response = ::paladin::task::AnyTaskOutput {
                         metadata: self.metadata.clone(),
@@ -187,8 +177,20 @@ pub fn op_kind_derive(input: TokenStream) -> TokenStream {
         #[::paladin::async_trait]
         impl ::paladin::task::RemoteExecute<#name> for ::paladin::task::AnyTask<#name> {
             async fn remote_execute(&self, runtime: &::paladin::runtime::WorkerRuntime<#name>) -> ::paladin::operation::Result<::paladin::task::AnyTaskOutput> {
-                match self.op_kind {
-                    #(#match_arms)*,
+                let get_result = || async {
+                    (match self.op_kind {
+                        #(#match_arms)*,
+                    }) as ::paladin::operation::Result<::paladin::task::AnyTaskOutput>
+                };
+
+                match get_result().await {
+                    Err(err) => {
+                        err.retry_trace(get_result, |e| {
+                            ::paladin::tracing::warn!("transient operation failure {e:?}");
+                        })
+                        .await
+                    },
+                    result => result
                 }
             }
         }
