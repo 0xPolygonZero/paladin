@@ -1090,7 +1090,7 @@ dependencies = [
 
 [[package]]
 name = "paladin-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1119,7 +1119,7 @@ dependencies = [
 
 [[package]]
 name = "paladin-opkind-derive"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "quote",
  "syn",
