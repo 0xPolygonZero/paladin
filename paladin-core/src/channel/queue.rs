@@ -12,7 +12,6 @@
 //!
 //! ```no_run
 //! use paladin::{
-//!     serializer::Serializer,
 //!     queue::{Connection, amqp::{AMQPConnection, AMQPConnectionOptions}},
 //!     channel::{Channel, ChannelType, ChannelFactory, queue::QueueChannelFactory},
 //! };
@@ -31,7 +30,7 @@
 //!     let conn = AMQPConnection::new(AMQPConnectionOptions {
 //!         uri: "amqp://localhost:5672",
 //!         qos: Some(1),
-//!         serializer: Serializer::Cbor,
+//!         serializer: Default::default(),
 //!     }).await?;
 //!
 //!     // Build the factory
@@ -50,7 +49,6 @@
 //!
 //! ```no_run
 //! use paladin::{
-//!     serializer::Serializer,
 //!     acker::Acker,
 //!     queue::{Connection, amqp::{AMQPConnection, AMQPConnectionOptions}},
 //!     channel::{Channel, ChannelType, ChannelFactory, queue::QueueChannelFactory},
@@ -70,7 +68,7 @@
 //!     let conn = AMQPConnection::new(AMQPConnectionOptions {
 //!         uri: "amqp://localhost:5672",
 //!         qos: Some(1),
-//!         serializer: Serializer::Cbor,
+//!         serializer: Default::default(),
 //!     }).await?;
 //!
 //!     // Build the factory

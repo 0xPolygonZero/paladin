@@ -9,7 +9,6 @@
 //!
 //! ```no_run
 //! # use paladin::queue::{Connection, QueueOptions, amqp::{AMQPConnection, AMQPConnectionOptions}};
-//! # use paladin::serializer::Serializer;
 //! # use paladin::queue::sink::QueueSink;
 //! # use anyhow::Result;
 //! use serde::{Serialize, Deserialize};
@@ -25,7 +24,7 @@
 //! let conn = AMQPConnection::new(AMQPConnectionOptions {
 //!     uri: "amqp://localhost:5672",
 //!     qos: Some(1),
-//!     serializer: Serializer::Cbor,
+//!     serializer: Default::default(),
 //! }).await?;
 //! let queue = conn.declare_queue("my_queue", QueueOptions::default()).await?;
 //! let mut sink = QueueSink::new(queue);
@@ -77,7 +76,6 @@ impl<Data, Handle> QueueSink<Data, Handle> {
     ///
     /// ```no_run
     /// # use paladin::queue::{Connection, QueueOptions, amqp::{AMQPConnection, AMQPConnectionOptions}};
-    /// # use paladin::serializer::Serializer;
     /// # use paladin::queue::sink::QueueSink;
     /// # use anyhow::Result;
     /// use serde::{Serialize, Deserialize};
@@ -93,7 +91,7 @@ impl<Data, Handle> QueueSink<Data, Handle> {
     /// let conn = AMQPConnection::new(AMQPConnectionOptions {
     ///     uri: "amqp://localhost:5672",
     ///     qos: Some(1),
-    ///     serializer: Serializer::Cbor,
+    ///     serializer: Default::default(),
     /// }).await?;
     /// let queue = conn.declare_queue("my_queue", QueueOptions::default()).await?;
     /// let mut sink = QueueSink::new(queue);

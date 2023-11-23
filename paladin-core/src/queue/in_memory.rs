@@ -773,7 +773,7 @@ mod broadcast {
     use crate::queue::*;
 
     async fn broadcast_handle() -> InMemoryQueueHandle {
-        let connection = InMemoryConnection::new(Serializer::Cbor);
+        let connection = InMemoryConnection::new(Default::default());
         connection
             .declare_queue(
                 "my_broadcast_queue",

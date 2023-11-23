@@ -4,7 +4,6 @@
 //!
 //! ```no_run
 //! use paladin::{
-//!     serializer::Serializer,
 //!     acker::Acker,
 //!     queue::{
 //!         Connection, QueueOptions, QueueHandle,
@@ -25,7 +24,7 @@
 //!     let conn = AMQPConnection::new(AMQPConnectionOptions {
 //!         uri: "amqp://localhost:5672",
 //!         qos: Some(1),
-//!         serializer: Serializer::Cbor,
+//!         serializer: Default::default(),
 //!     }).await?;
 //!     let queue = conn.declare_queue("my_queue", QueueOptions::default()).await?;
 //!
@@ -140,14 +139,13 @@ pub struct AMQPConnectionOptions<'a> {
 /// use paladin::queue::{
 ///     amqp::{AMQPConnection, AMQPConnectionOptions}
 /// };
-/// use paladin::serializer::Serializer;
 /// # use anyhow::Result;
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let conn = AMQPConnection::new(AMQPConnectionOptions {
 ///     uri: "amqp://localhost:5672",
 ///     qos: Some(1),
-///     serializer: Serializer::Cbor,
+///     serializer: Default::default(),
 /// }).await?;
 ///
 /// Ok(())
@@ -287,7 +285,6 @@ impl Connection for AMQPConnection {
     ///
     /// ```no_run
     /// # use paladin::{
-    ///     serializer::Serializer,
     ///     queue::{Connection, QueueOptions, amqp::{AMQPConnection, AMQPConnectionOptions}}
     /// };
     /// # use anyhow::Result;
@@ -296,7 +293,7 @@ impl Connection for AMQPConnection {
     /// let conn = AMQPConnection::new(AMQPConnectionOptions {
     ///     uri: "amqp://localhost:5672",
     ///     qos: Some(1),
-    ///     serializer: Serializer::Cbor,
+    ///     serializer: Default::default(),
     /// }).await?;
     /// let queue = conn.declare_queue("my_queue", QueueOptions::default()).await?;
     ///
@@ -383,7 +380,6 @@ impl QueueHandle for AMQPQueueHandle {
     /// # Example
     /// ```no_run
     /// use paladin::{
-    ///     serializer::Serializer,
     ///     queue::{
     ///         Connection,
     ///         QueueHandle,
@@ -404,7 +400,7 @@ impl QueueHandle for AMQPQueueHandle {
     ///     let conn = AMQPConnection::new(AMQPConnectionOptions {
     ///         uri: "amqp://localhost:5672",
     ///         qos: Some(1),
-    ///         serializer: Serializer::Cbor,
+    ///         serializer: Default::default(),
     ///     }).await?;
     ///     let queue = conn.declare_queue("my_queue", QueueOptions::default()).await?;
     ///
@@ -427,7 +423,6 @@ impl QueueHandle for AMQPQueueHandle {
     /// Get a consumer instance to the queue.
     /// ```no_run
     /// use paladin::{
-    ///     serializer::Serializer,
     ///     queue::{
     ///         Connection,
     ///         QueueHandle,
@@ -448,7 +443,7 @@ impl QueueHandle for AMQPQueueHandle {
     ///     let conn = AMQPConnection::new(AMQPConnectionOptions {
     ///         uri: "amqp://localhost:5672",
     ///         qos: Some(1),
-    ///         serializer: Serializer::Cbor,
+    ///         serializer: Default::default(),
     ///     }).await?;
     ///     let queue = conn.declare_queue("my_queue", QueueOptions::default()).await?;
     ///
