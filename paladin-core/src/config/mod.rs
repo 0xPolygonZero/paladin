@@ -19,30 +19,45 @@
 
 use clap::{Args, ValueEnum};
 
+const DEFAULT_TASK_ROUTING_KEY: &str = "task";
+const HELP_HEADING: &str = "Paladin options";
+
 /// Represents the main configuration structure for the runtime.
-#[derive(Args, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
+#[derive(Args, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Config {
     /// Specifies the routing key for publishing task messages. In most cases,
     /// the default value should suffice.
-    #[arg(long, short, default_value = "task")]
+    #[arg(long, short, help_heading = HELP_HEADING, default_value = DEFAULT_TASK_ROUTING_KEY)]
     pub task_bus_routing_key: String,
 
     /// Determines the serialization format to be used.
-    #[arg(long, short, value_enum, default_value_t = Serializer::Postcard)]
+    #[arg(long, short, help_heading = HELP_HEADING, value_enum, default_value_t = Serializer::Postcard)]
     pub serializer: Serializer,
 
     /// Specifies the runtime environment to use.
-    #[arg(long, short, value_enum, default_value_t = Runtime::Amqp)]
+    #[arg(long, short, help_heading = HELP_HEADING, value_enum, default_value_t = Runtime::Amqp)]
     pub runtime: Runtime,
 
     /// Specifies the number of worker threads to spawn (in memory runtime
     /// only).
-    #[arg(long, short)]
+    #[arg(long, short, help_heading = HELP_HEADING,)]
     pub num_workers: Option<usize>,
 
     /// Provides the URI for the AMQP broker, if the AMQP runtime is selected.
-    #[arg(long, env = "AMQP_URI", required_if_eq("runtime", "amqp"))]
+    #[arg(long, help_heading = HELP_HEADING, env = "AMQP_URI", required_if_eq("runtime", "amqp"))]
     pub amqp_uri: Option<String>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            task_bus_routing_key: DEFAULT_TASK_ROUTING_KEY.to_string(),
+            serializer: Default::default(),
+            runtime: Default::default(),
+            num_workers: Default::default(),
+            amqp_uri: Default::default(),
+        }
+    }
 }
 
 /// Enumerates the available serialization formats.
