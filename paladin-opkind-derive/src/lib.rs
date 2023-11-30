@@ -135,9 +135,10 @@ pub fn operation_derive(input: TokenStream) -> TokenStream {
                             #paladin_path::operation::FatalStrategy::Terminate
                         ))??;
 
+                        #paladin_path::__private::tracing::debug!(operation = %stringify!(#name), output = ?typed_output, "operation executed successfully");
+
                         // Serialize the output.
                         let serialized_output = op.output_to_bytes(task.serializer, typed_output)?;
-                        #paladin_path::__private::tracing::debug!(operation = %stringify!(#name), output = ?serialized_output, "operation executed successfully");
 
                         Ok(serialized_output) as #paladin_path::operation::Result<Vec<u8>>
                     })
