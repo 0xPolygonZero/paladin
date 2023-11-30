@@ -39,8 +39,10 @@ pub enum DynamicChannel {
 #[async_trait]
 impl Channel for DynamicChannel {
     type Acker = Box<dyn Acker>;
-    type Sender<T: Serializable> = Box<dyn Sink<T, Error = anyhow::Error> + Send + Unpin>;
-    type Receiver<T: Serializable> = Box<dyn Stream<Item = (T, Self::Acker)> + Send + Sync + Unpin>;
+    type Sender<'a, T: Serializable + 'a> =
+        Box<dyn Sink<T, Error = anyhow::Error> + Send + Unpin + 'a>;
+    type Receiver<'a, T: Serializable + 'a> =
+        Box<dyn Stream<Item = (T, Self::Acker)> + Send + Unpin + 'a>;
 
     async fn close(&self) -> Result<()> {
         match self {
@@ -49,14 +51,14 @@ impl Channel for DynamicChannel {
         }
     }
 
-    async fn sender<T: Serializable>(&self) -> Result<Self::Sender<T>> {
+    async fn sender<'a, T: Serializable + 'a>(&self) -> Result<Self::Sender<'a, T>> {
         match self {
             Self::Amqp(channel) => Ok(Box::new(channel.sender().await?)),
             Self::InMemory(channel) => Ok(Box::new(channel.sender().await?)),
         }
     }
 
-    async fn receiver<T: Serializable>(&self) -> Result<Self::Receiver<T>> {
+    async fn receiver<'a, T: Serializable + 'a>(&self) -> Result<Self::Receiver<'a, T>> {
         match self {
             Self::Amqp(channel) => {
                 Ok(Box::new(channel.receiver().await?.map(

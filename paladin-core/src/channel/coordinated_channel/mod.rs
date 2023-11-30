@@ -62,7 +62,7 @@ impl ChannelState {
 /// [`coordinated_channel`] solves these problems by binding the sender and
 /// receiver to a shared state that tracks sender closure and pending sends.
 pub fn coordinated_channel<
-    A: Unpin,
+    A,
     B,
     Sender: Sink<A, Error = anyhow::Error>,
     Receiver: Stream<Item = B>,

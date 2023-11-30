@@ -2,16 +2,16 @@
 //!
 //! Tasks encode an [`Operation`] paired with arguments and additional metadata.
 //! They represent the payloads used to communicate between
-//! [`Runtime`](crate::runtime::Runtime)s and [`WorkerRuntime`]s.
+//! [`Runtime`](crate::runtime::Runtime)s and
+//! [`WorkerRuntime`](crate::runtime::WorkerRuntime)s.
 use std::fmt::Debug;
 
 use anyhow::Result;
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    operation::{OpKind, Operation},
-    runtime::WorkerRuntime,
+    __private::OPERATIONS,
+    operation::Operation,
     serializer::{Serializable, Serializer},
 };
 
@@ -25,9 +25,8 @@ use crate::{
 /// Metadata can be any arbitrary [`Serializable`] type.
 /// It's typically used by [`Directive`](crate::directive::Directive)s to encode
 /// additional information about the computation.
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(bound = "Op: Operation")]
-pub struct Task<Op: Operation, Metadata: Serializable> {
+#[derive(Debug)]
+pub struct Task<'a, Op: Operation, Metadata: Serializable> {
     /// The routing key used to identify the
     /// [`Channel`](crate::channel::Channel) to which execution results should
     /// be sent.
@@ -35,7 +34,7 @@ pub struct Task<Op: Operation, Metadata: Serializable> {
     /// Metadata associated with the [`Task`].
     pub metadata: Metadata,
     /// The [`Operation`] to be executed.
-    pub op: Op,
+    pub op: &'a Op,
     /// The arguments to the [`Operation`].
     pub input: Op::Input,
 }
@@ -49,8 +48,6 @@ pub struct Task<Op: Operation, Metadata: Serializable> {
 pub struct TaskOutput<Op: Operation, Metadata: Serializable> {
     /// Metadata associated with the [`Task`] that produced this result.
     pub metadata: Metadata,
-    /// The [`Operation`] that was executed.
-    pub op: Op,
     /// The output of the [`Operation`] execution.
     pub output: Op::Output,
 }
@@ -62,17 +59,17 @@ pub type TaskResult<Op, Metadata> = Result<TaskOutput<Op, Metadata>>;
 /// This type is used to facilitate opaque execution of [`Operation`]s, such
 /// that executors can execute arbitrary [`Operation`]s.
 #[derive(Serialize, Deserialize, Debug)]
-#[serde(bound = "Kind: OpKind")]
-pub struct AnyTask<Kind: OpKind> {
+pub struct AnyTask {
     /// The routing key used to identify the
     /// [`Channel`](crate::channel::Channel) to which execution results should
     /// be sent.
     pub routing_key: String,
     /// Serialized metadata associated with the [`Task`].
     pub metadata: Vec<u8>,
-    /// The [`OpKind`] of the [`Operation`] to be
-    /// executed.
-    pub op_kind: Kind,
+    /// The serialized [`Operation`] to be executed.
+    pub op: Vec<u8>,
+    /// The unique identifier of the [`Operation`] to be executed.
+    pub operation_id: u8,
     /// Serialized arguments to the [`Operation`].
     pub input: Vec<u8>,
     /// The [`Serializer`] used to serialize and deserialize the [`Operation`]
@@ -87,8 +84,6 @@ pub struct AnyTaskOutput {
     pub metadata: Vec<u8>,
     /// Serialized output of the [`Operation`] execution.
     pub output: Vec<u8>,
-    /// Serialized [`Operation`] that was executed.
-    pub op: Vec<u8>,
     /// The [`Serializer`] used to serialize and deserialize the [`Operation`].
     pub serializer: Serializer,
 }
@@ -100,19 +95,13 @@ impl<Op: Operation, Metadata: Serializable> TryFrom<AnyTaskOutput> for TaskOutpu
         AnyTaskOutput {
             metadata,
             output,
-            op,
             serializer,
         }: AnyTaskOutput,
     ) -> Result<Self> {
         let metadata = serializer.from_bytes(&metadata)?;
         let output = serializer.from_bytes(&output)?;
-        let op = serializer.from_bytes(&op)?;
 
-        Ok(TaskOutput {
-            metadata,
-            op,
-            output,
-        })
+        Ok(TaskOutput { metadata, output })
     }
 }
 
@@ -125,18 +114,19 @@ pub enum AnyTaskResult {
     Err(String),
 }
 
-impl<Op: Operation, Metadata: Serializable> Task<Op, Metadata> {
+impl<'a, Op: Operation, Metadata: Serializable> Task<'a, Op, Metadata> {
     /// Convert a [`Task`] into an opaque [`AnyTask`].
-    pub fn into_any_task(self, serializer: Serializer) -> Result<AnyTask<Op::Kind>> {
-        let op = self.op;
-        let routing_key = self.routing_key;
+    pub fn into_any_task(self, serializer: Serializer) -> Result<AnyTask> {
+        let routing_key = self.routing_key.to_string();
         let metadata = serializer.to_bytes(&self.metadata)?;
         let input = serializer.to_bytes(&self.input)?;
+        let op = serializer.to_bytes(self.op)?;
 
         Ok(AnyTask {
             routing_key,
             metadata,
-            op_kind: op.into(),
+            operation_id: Op::ID,
+            op,
             input,
             serializer,
         })
@@ -163,21 +153,14 @@ impl<Op: Operation, Metadata: Serializable> From<AnyTaskResult>
     }
 }
 
-/// Trait for opaque execution of a [`Task`].
-///
-/// This trait will be automatically implemented for `OpKind`s who use the the
-/// [derive macro](crate::opkind_derive::OpKind). It is highly recommended that
-/// you use the derive macro rather than implementing this trait manually,
-/// unless you really want to do something custom.
-///
-/// In summary, this trait is used to execute a [`Task`] on a
-/// [`WorkerRuntime`](crate::runtime::WorkerRuntime). Once the task has been
-/// executed, the result should be sent back to the caller via the
-/// [`Channel`](crate::channel::Channel) at the [`Task`]s identifier.
-#[async_trait]
-pub trait RemoteExecute<Kind: OpKind> {
-    async fn remote_execute(
-        &self,
-        runtime: &WorkerRuntime<Kind>,
-    ) -> crate::operation::Result<AnyTaskOutput>;
+impl AnyTask {
+    /// Opaque execution of a [`Task`].
+    ///
+    /// This function is used to execute arbitrary [`Operation`]s. It uses the
+    /// [`RemoteExecute::ID`](crate::operation::RemoteExecute::ID) field to
+    /// acquire the correct execution pointer from the [`static@OPERATIONS`]
+    /// slice.
+    pub async fn remote_execute(self) -> crate::operation::Result<AnyTaskOutput> {
+        OPERATIONS[self.operation_id as usize](self).await
+    }
 }

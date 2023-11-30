@@ -67,17 +67,17 @@ use crate::{
         coordinated_channel::coordinated_channel, Channel, ChannelFactory, ChannelType, LeaseGuard,
     },
     config::Config,
-    operation::{FatalStrategy, OpKind, Operation},
+    operation::{marker::Marker, FatalStrategy, Operation},
     serializer::{Serializable, Serializer},
-    task::{AnyTask, AnyTaskOutput, AnyTaskResult, RemoteExecute, Task, TaskResult},
+    task::{AnyTask, AnyTaskOutput, AnyTaskResult, Task, TaskResult},
 };
 
-type Receiver<Item> = Box<dyn Stream<Item = (Item, Box<dyn Acker>)> + Send + Sync + Unpin>;
-type Sender<Item> = Box<dyn Sink<Item, Error = anyhow::Error> + Send + Unpin>;
-type CoordinatedTaskChannel<Op, Metadata> = (
+type Receiver<'a, Item> = Box<dyn Stream<Item = (Item, Box<dyn Acker>)> + Send + Unpin + 'a>;
+type Sender<'a, Item> = Box<dyn Sink<Item, Error = anyhow::Error> + Send + Unpin + 'a>;
+type CoordinatedTaskChannel<'a, Op, Metadata> = (
     String,
-    Sender<Task<Op, Metadata>>,
-    LeaseGuard<DynamicChannel, Receiver<TaskResult<Op, Metadata>>>,
+    Sender<'a, Task<'a, Op, Metadata>>,
+    LeaseGuard<DynamicChannel, Receiver<'a, TaskResult<Op, Metadata>>>,
 );
 
 /// The core of the distributed task management system.
@@ -120,10 +120,7 @@ pub struct Runtime {
 
 impl Runtime {
     /// Initializes the [`Runtime`] with the provided [`Config`].
-    pub async fn from_config<K: OpKind>(config: &Config) -> Result<Self>
-    where
-        AnyTask<K>: RemoteExecute<K>,
-    {
+    pub async fn from_config(config: &Config) -> Result<Self> {
         let channel_factory = DynamicChannelFactory::from_config(config).await?;
         let task_channel = channel_factory
             .get(&config.task_bus_routing_key, ChannelType::ExactlyOnce)
@@ -149,37 +146,31 @@ impl Runtime {
     }
 
     /// Short-hand for initializing an in-memory [`Runtime`].
-    pub async fn in_memory<K: OpKind>() -> Result<Self>
-    where
-        AnyTask<K>: RemoteExecute<K>,
-    {
+    pub async fn in_memory() -> Result<Self> {
         let config = Config {
             runtime: crate::config::Runtime::InMemory,
             ..Default::default()
         };
-        Self::from_config::<K>(&config).await
+        Self::from_config(&config).await
     }
 
     /// Spawns an emulator for the worker runtime.
     ///
     /// This is used to emulate the worker runtime when running in-memory.
-    fn spawn_emulator<K: OpKind>(
+    fn spawn_emulator(
         channel_factory: DynamicChannelFactory,
         task_channel: DynamicChannel,
         num_threads: usize,
-    ) -> Vec<JoinHandle<Result<()>>>
-    where
-        AnyTask<K>: RemoteExecute<K>,
-    {
+    ) -> Vec<JoinHandle<Result<()>>> {
         (0..num_threads)
             .map(|_| {
                 let channel_factory = channel_factory.clone();
                 let task_channel = task_channel.clone();
                 tokio::spawn(async move {
-                    let worker_runtime: WorkerRuntime<K> = WorkerRuntime {
+                    let worker_runtime = WorkerRuntime {
                         channel_factory,
                         task_channel,
-                        _kind: std::marker::PhantomData,
+                        _marker: Marker,
                     };
                     worker_runtime.main_loop().await?;
                     Ok(())
@@ -210,16 +201,16 @@ impl Runtime {
     /// [`Directive`](crate::directive::Directive) needs to coordinate the
     /// results of multiple [`Task`]s.
     #[instrument(skip_all, level = "debug")]
-    async fn get_task_sender<Op: Operation, Metadata: Serializable>(
+    async fn get_task_sender<'a, Op: Operation, Metadata: Serializable + 'a>(
         &self,
-    ) -> Result<Sender<Task<Op, Metadata>>> {
+    ) -> Result<Sender<'a, Task<'a, Op, Metadata>>> {
         // Get a sink for the task channel, which accepts `AnyTask`.
-        let sink = self.task_channel.sender::<AnyTask<Op::Kind>>().await?;
+        let sink = self.task_channel.sender::<AnyTask>().await?;
         let serializer = self.serializer;
         // Transform the sink to accept typed `Task`s by serializing them into
         // `AnyTask`s on behalf of the caller. This allows the caller to pass in
         // a typed `Task` without having to worry about serialization.
-        let transformed_sink = sink.with(move |task: Task<Op, Metadata>| {
+        let transformed_sink = sink.with(move |task: Task<'a, Op, Metadata>| {
             Box::pin(async move { task.into_any_task(serializer) })
         });
 
@@ -256,37 +247,30 @@ impl Runtime {
     /// # Example
     /// ```
     /// use paladin::{
+    ///     RemoteExecute,
     ///     runtime::Runtime,
     ///     task::Task,
     ///     operation::{Operation, Result},
-    ///     opkind_derive::OpKind
     /// };
     /// use serde::{Deserialize, Serialize};
     /// use futures::{StreamExt, SinkExt};
-    ///
-    /// #[derive(OpKind, Serialize, Deserialize, Debug, Clone, Copy)]
-    /// enum MyOps {
-    ///     // ... your operations
-    /// #   StringLength(StringLength),
-    /// }
     ///
     /// #[derive(Serialize, Deserialize)]
     /// struct Metadata {
     ///     id: usize,
     /// }
-    /// # #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+    /// # #[derive(Serialize, Deserialize, RemoteExecute)]
     /// # struct StringLength;
     /// # impl Operation for StringLength {
     /// #    type Input = String;
     /// #    type Output = usize;
-    /// #    type Kind = MyOps;
     /// #    
     /// #    fn execute(&self, input: Self::Input) -> Result<Self::Output> {
     /// #       Ok(input.len())
     /// #    }
     /// # }
     ///
-    /// async fn run_task<Op: Operation>(op: Op, runtime: Runtime, input: Op::Input) -> anyhow::Result<()> {
+    /// async fn run_task<Op: Operation>(op: &Op, runtime: &Runtime, input: Op::Input) -> anyhow::Result<()> {
     ///     let (identifier, mut sender, mut receiver) = runtime.lease_coordinated_task_channel::<Op, Metadata>().await?;
     ///
     ///     // Issue a task with the identifier of the receiver
@@ -316,9 +300,9 @@ impl Runtime {
     /// [`Directive`](crate::directive::Directive) needs to coordinate the
     /// results of multiple [`Task`]s.
     #[instrument(skip_all, level = "debug")]
-    pub async fn lease_coordinated_task_channel<Op: Operation, Metadata: Serializable>(
+    pub async fn lease_coordinated_task_channel<'a, Op: Operation, Metadata: Serializable + 'a>(
         &self,
-    ) -> Result<CoordinatedTaskChannel<Op, Metadata>> {
+    ) -> Result<CoordinatedTaskChannel<'a, Op, Metadata>> {
         // Issue a new channel and return its identifier paired with a stream of
         // results.
         let (task_sender, (result_channel_identifier, result_channel)) = try_join!(
@@ -382,10 +366,10 @@ impl Drop for Runtime {
 /// 2. Execute those [`Task`]s.
 /// 3. Send back the results of a [`Task`] execution.
 #[derive(Clone)]
-pub struct WorkerRuntime<Kind: OpKind> {
+pub struct WorkerRuntime {
     channel_factory: DynamicChannelFactory,
     task_channel: DynamicChannel,
-    _kind: std::marker::PhantomData<Kind>,
+    _marker: Marker,
 }
 
 #[derive(Debug)]
@@ -407,12 +391,9 @@ pub enum WorkerIpc {
     ExecutionError { routing_key: String },
 }
 
-impl<Kind: OpKind> WorkerRuntime<Kind>
-where
-    AnyTask<Kind>: RemoteExecute<Kind>,
-{
+impl WorkerRuntime {
     /// Initializes the [`WorkerRuntime`] with the provided [`Config`].
-    pub async fn from_config(config: &Config) -> Result<Self> {
+    pub async fn from_config(config: &Config, marker: Marker) -> Result<Self> {
         let channel_factory = DynamicChannelFactory::from_config(config).await?;
         let task_channel = channel_factory
             .get(&config.task_bus_routing_key, ChannelType::ExactlyOnce)
@@ -421,7 +402,7 @@ where
         Ok(Self {
             channel_factory,
             task_channel,
-            _kind: std::marker::PhantomData,
+            _marker: marker,
         })
     }
 
@@ -429,10 +410,6 @@ where
     ///
     /// Typically used by a worker node for send back the results of a [`Task`]
     /// execution.
-    ///
-    /// The [`opkind_derive::OpKind`](crate::opkind_derive::OpKind) macro uses
-    /// this internally to provide a [`RemoteExecute`] implementation for
-    /// [`AnyTask`].
     #[instrument(skip(self), level = "trace")]
     pub async fn get_result_sender(&self, identifier: &str) -> Result<Sender<AnyTaskResult>> {
         self.channel_factory
@@ -466,7 +443,7 @@ where
     /// Typically used by a worker node to listen for fatal errors from other
     /// workers.
     #[instrument(skip(self), level = "trace")]
-    pub async fn get_ipc_receiver(&self) -> Result<BoxStream<WorkerIpc>> {
+    pub async fn get_ipc_receiver(&self) -> Result<BoxStream<'static, WorkerIpc>> {
         let s = self
             .channel_factory
             .get(Self::broadcast_ipc_routing_key(), ChannelType::Broadcast)
@@ -491,32 +468,27 @@ where
     /// ```no_run
     /// use clap::Parser;
     /// use paladin::{
+    ///     RemoteExecute,
     ///     config::Config,
+    ///     registry,
     ///     runtime::WorkerRuntime,
     ///     operation::{Operation, Result},
-    ///     opkind_derive::OpKind
     /// };
     /// use serde::{Deserialize, Serialize};
     /// use futures::StreamExt;
-    ///
-    /// # #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+    /// #
+    /// # #[derive(Serialize, Deserialize, RemoteExecute)]
     /// # struct StringLength;
     /// #
     /// # impl Operation for StringLength {
     /// #    type Input = String;
     /// #    type Output = usize;
-    /// #    type Kind = MyOps;
     /// #    
     /// #    fn execute(&self, input: Self::Input) -> Result<Self::Output> {
     /// #        Ok(input.len())
     /// #    }
     /// # }
     /// #
-    /// #[derive(OpKind, Serialize, Deserialize, Debug, Clone, Copy)]
-    /// enum MyOps {
-    ///     // ... your operations
-    /// #   StringLength(StringLength),
-    /// }
     ///
     /// #[derive(Parser, Debug)]
     /// pub struct Cli {
@@ -524,10 +496,12 @@ where
     ///     pub options: Config,
     /// }
     ///
+    /// paladin::registry!();
+    ///
     /// #[tokio::main]
     /// async fn main() -> anyhow::Result<()> {
     ///     let args = Cli::parse();
-    ///     let runtime: WorkerRuntime<MyOps> = WorkerRuntime::from_config(&args.options).await?;
+    ///     let runtime = WorkerRuntime::from_config(&args.options, register()).await?;
     ///     
     ///     let mut task_stream = runtime.get_task_receiver().await?;
     ///     while let Some((task, delivery)) = task_stream.next().await {
@@ -537,7 +511,7 @@ where
     /// }
     /// ```
     #[instrument(skip_all, level = "trace")]
-    pub async fn get_task_receiver(&self) -> Result<Receiver<AnyTask<Kind>>> {
+    pub async fn get_task_receiver(&self) -> Result<Receiver<AnyTask>> {
         self.task_channel.receiver().await
     }
 
@@ -604,35 +578,33 @@ where
     /// out of the box that will work for most use cases. Users are free to
     /// implement their own if they need to.
     ///
+    /// Note that if you define your operations in a separate crate, you'll need
+    /// to use the [`registry!`](crate::registry) macro to register them with
+    /// the runtime.
+    ///
     /// # Example
     /// ```no_run
     /// use paladin::{
+    ///     RemoteExecute,
     ///     runtime::WorkerRuntime,
     ///     config::Config,
     ///     task::Task,
     ///     operation::{Result, Operation},
-    ///     opkind_derive::OpKind,
+    ///     registry,
     /// };
     /// use clap::Parser;
     /// use serde::{Deserialize, Serialize};
-    ///
-    /// #[derive(OpKind, Serialize, Deserialize, Debug, Clone, Copy)]
-    /// enum MyOps {
-    ///     // ... your operations
-    /// #   StringLength(StringLength),
-    /// }
-    ///
-    /// # #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+    /// # #[derive(Serialize, Deserialize, RemoteExecute)]
     /// # struct StringLength;
     /// # impl Operation for StringLength {
     /// #    type Input = String;
     /// #    type Output = usize;
-    /// #    type Kind = MyOps;
     /// #    
     /// #    fn execute(&self, input: Self::Input) -> Result<Self::Output> {
     /// #       Ok(input.len())
     /// #    }
     /// # }
+    /// #
     ///
     /// #[derive(Parser, Debug)]
     /// pub struct Cli {
@@ -640,10 +612,12 @@ where
     ///     pub options: Config,
     /// }
     ///
+    /// registry!();
+    ///
     /// #[tokio::main]
     /// async fn main() -> anyhow::Result<()> {
     ///     let args = Cli::parse();
-    ///     let runtime = WorkerRuntime::from_config(&args.options).await?;
+    ///     let runtime = WorkerRuntime::from_config(&args.options, register()).await?;
     ///     runtime.main_loop().await?;
     ///
     ///     Ok(())
@@ -675,16 +649,11 @@ where
 
         // Spawn a task that will listen for IPC termination signals and mark
         // jobs as terminated.
+        let mut ipc_receiver = self.get_ipc_receiver().await?;
         let remote_ipc_sig_term_handler = tokio::spawn({
             let terminated_jobs = terminated_jobs.clone();
-            let rt = self.clone();
 
             async move {
-                let mut ipc_receiver = rt
-                    .get_ipc_receiver()
-                    .await
-                    .expect("failed to get IPC receiver");
-
                 while let Some(ipc) = ipc_receiver.next().await {
                     match ipc {
                         WorkerIpc::ExecutionError { routing_key } => {
@@ -724,15 +693,9 @@ where
 
             let routing_key = payload.routing_key.clone();
 
+            let span = debug_span!("remote_execute", routing_key = %routing_key);
             // Spawn a task that will execute the task.
-            let execution_task = tokio::spawn({
-                let rt = self.clone();
-                async move {
-                    payload.remote_execute(&rt)
-                        .instrument(debug_span!("remote_execute", routing_key = %payload.routing_key, op = ?payload.op_kind))
-                        .await
-                }
-            });
+            let execution_task = payload.remote_execute().instrument(span);
 
             // Create a future that will wait for an IPC termination signal.
             let ipc_sig_term = {
@@ -748,11 +711,12 @@ where
                 }
             };
 
-            // Wait for either the task to complete or an IPC termination signal.
+            // Wait for either the task to complete or an IPC termination
+            // signal.
             select! {
                 execution = execution_task => {
                     match execution {
-                        Ok(Ok(output)) => {
+                        Ok(output) => {
                             try_join!(
                                 acker.ack(),
                                 self.dispatch_ok(ExecutionOk {
@@ -761,8 +725,7 @@ where
                                 })
                             )?;
                         }
-                        // Task execution failed
-                        Ok(Err(err)) => {
+                        Err(err) => {
                             error!(routing_key = %routing_key, "execution error: {err:?}");
                             mark_terminated(&terminated_jobs, &routing_key);
 
@@ -775,22 +738,7 @@ where
                                 })
                             )?;
                         }
-                        // Thread panicked
-                        Err(err) => {
-                            error!(routing_key = %routing_key, "thread panic: {err:?}");
-                            mark_terminated(&terminated_jobs, &routing_key);
-
-                            try_join!(
-                                acker.nack(),
-                                self.dispatch_fatal(ExecutionErr {
-                                    routing_key: &routing_key,
-                                    strategy: FatalStrategy::Terminate,
-                                    err,
-                                })
-                            )?;
-                        }
                     }
-
                 }
                 _ = ipc_sig_term => {
                     warn!(routing_key = %routing_key, "task cancelled via IPC sigterm");

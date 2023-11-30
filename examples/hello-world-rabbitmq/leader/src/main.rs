@@ -27,8 +27,8 @@ async fn main() -> Result<()> {
 
     let input = ['h', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd', '!'];
     let computation = IndexedStream::from(input)
-        .map(CharToString)
-        .fold(StringConcat);
+        .map(&CharToString)
+        .fold(&StringConcat);
 
     let result = computation.run(&runtime).await;
     runtime.close().await?;

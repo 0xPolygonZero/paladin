@@ -146,8 +146,8 @@ impl<
     > Channel for QueueChannel<Conn>
 {
     type Acker = <QHandle as QueueHandle>::Acker;
-    type Sender<T: Serializable> = QueueSink<T, QHandle>;
-    type Receiver<T: Serializable> = <QHandle as QueueHandle>::Consumer<T>;
+    type Sender<'a, T: Serializable + 'a> = QueueSink<'a, T, QHandle>;
+    type Receiver<'a, T: Serializable + 'a> = <QHandle as QueueHandle>::Consumer<T>;
 
     /// Close the underlying connection.
     async fn close(&self) -> Result<()> {
@@ -156,7 +156,7 @@ impl<
     }
 
     /// Get a sender for the underlying queue.
-    async fn sender<T: Serializable>(&self) -> Result<Self::Sender<T>> {
+    async fn sender<'a, T: Serializable + 'a>(&self) -> Result<Self::Sender<'a, T>> {
         let queue = self
             .connection
             .declare_queue(&self.identifier, self.channel_type.into())
@@ -165,7 +165,7 @@ impl<
     }
 
     /// Get a receiver for the underlying queue.
-    async fn receiver<T: Serializable>(&self) -> Result<Self::Receiver<T>> {
+    async fn receiver<'a, T: Serializable + 'a>(&self) -> Result<Self::Receiver<'a, T>> {
         let queue = self
             .connection
             .declare_queue(&self.identifier, self.channel_type.into())

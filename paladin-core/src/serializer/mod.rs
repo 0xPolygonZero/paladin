@@ -32,7 +32,7 @@
 //! ```
 
 use anyhow::Result;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::config::{self, Config};
@@ -44,8 +44,8 @@ use crate::config::{self, Config};
 /// hence the requirements for `Send`, `Sync`, and `Unpin`. As such, it's
 /// recommended to use owned types for serialization and deserialization to
 /// ensure compatibility with this trait.
-pub trait Serializable: Serialize + DeserializeOwned + Send + Sync + Unpin + 'static {}
-impl<T> Serializable for T where T: Serialize + DeserializeOwned + Send + Sync + Unpin + 'static {}
+pub trait Serializable: Serialize + for<'de> Deserialize<'de> + Send + Sync + Unpin {}
+impl<T> Serializable for T where T: Serialize + for<'de> Deserialize<'de> + Send + Sync + Unpin {}
 
 /// Provides a unified interface for serializing and deserializing binary data.
 ///

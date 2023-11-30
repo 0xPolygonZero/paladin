@@ -61,7 +61,7 @@ fn err_closed<T>() -> anyhow::Result<T> {
     bail!(CoordinatedSinkError::SinkClosed)
 }
 
-impl<T: Unpin, Inner: Sink<T, Error = anyhow::Error>> Sink<T> for CoordinatedSink<T, Inner> {
+impl<T, Inner: Sink<T, Error = anyhow::Error>> Sink<T> for CoordinatedSink<T, Inner> {
     type Error = anyhow::Error;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {

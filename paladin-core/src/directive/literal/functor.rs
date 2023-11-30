@@ -6,19 +6,19 @@ use super::Literal;
 use crate::{directive::Functor, operation::Operation, runtime::Runtime, task::Task};
 
 #[async_trait]
-impl<A: Send, B: Send + 'static> Functor<B> for Literal<A> {
+impl<'a, A: Send, B: Send> Functor<'a, B> for Literal<A> {
     async fn f_map<Op: Operation<Input = A, Output = B>>(
         self,
-        op: Op,
+        op: &'a Op,
         runtime: &Runtime,
     ) -> Result<Self::Target> {
         let (channel_identifier, mut sender, mut receiver) =
-            runtime.lease_coordinated_task_channel::<Op, ()>().await?;
+            runtime.lease_coordinated_task_channel().await?;
 
         let task = Task {
-            routing_key: channel_identifier.clone(),
+            routing_key: channel_identifier,
             metadata: (),
-            op: op.clone(),
+            op,
             input: self.0,
         };
 

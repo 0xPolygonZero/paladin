@@ -56,7 +56,8 @@ impl<Op: Operation> Contiguous for TaskOutput<Op, Metadata> {
     }
 }
 
-type Sender<Op> = Box<dyn Sink<Task<Op, Metadata>, Error = anyhow::Error> + Send + Unpin>;
+type Sender<'a, Op> =
+    Box<dyn Sink<Task<'a, Op, Metadata>, Error = anyhow::Error> + Send + Unpin + 'a>;
 
 /// A [`Dispatcher`] abstracts over the common functionality of queuing and
 /// dispatching contiguous [`Task`]s to worker processes.
@@ -69,19 +70,22 @@ type Sender<Op> = Box<dyn Sink<Task<Op, Metadata>, Error = anyhow::Error> + Send
 /// - Dequeuing [`TaskResult`]s.
 /// - Attempting to dispatch [`TaskResult`]s if they are contiguous with another
 ///   [`TaskResult`].
-struct Dispatcher<Op: Monoid> {
+struct Dispatcher<'a, Op: Monoid> {
+    op: &'a Op,
     assembler: Arc<Mutex<ContiguousQueue<TaskOutput<Op, Metadata>>>>,
-    sender: Arc<Mutex<Sender<Op>>>,
+    sender: Arc<Mutex<Sender<'a, Op>>>,
     channel_identifier: String,
 }
 
-impl<Op: Monoid> Dispatcher<Op> {
+impl<'a, Op: Monoid> Dispatcher<'a, Op> {
     fn new(
+        op: &'a Op,
         assembler: Arc<Mutex<ContiguousQueue<TaskOutput<Op, Metadata>>>>,
-        sender: Arc<Mutex<Sender<Op>>>,
+        sender: Arc<Mutex<Sender<'a, Op>>>,
         channel_identifier: String,
     ) -> Self {
         Self {
+            op,
             assembler,
             sender,
             channel_identifier,
@@ -113,7 +117,7 @@ impl<Op: Monoid> Dispatcher<Op> {
                 metadata: Metadata {
                     range: *lhs.metadata.range.start()..=*rhs.metadata.range.end(),
                 },
-                op: lhs.op.clone(),
+                op: self.op,
                 input: (lhs.output, rhs.output),
             };
             let mut sender = self.sender.lock().await;
@@ -125,11 +129,11 @@ impl<Op: Monoid> Dispatcher<Op> {
 }
 
 #[async_trait]
-impl<A: Send + 'static, B: Send + 'static> Foldable<B> for IndexedStream<A> {
-    async fn f_fold<M: Monoid<Elem = A>>(self, m: M, runtime: &Runtime) -> Result<A> {
-        let (channel_identifier, sender, mut receiver) = runtime
-            .lease_coordinated_task_channel::<M, Metadata>()
-            .await?;
+impl<'a, A: Send + 'a, B: Send + 'a> Foldable<'a, B> for IndexedStream<'a, A> {
+    async fn f_fold<M: Monoid<Elem = A>>(self, m: &'a M, runtime: &Runtime) -> Result<A> {
+        let (channel_identifier, sender, mut receiver) =
+            runtime.lease_coordinated_task_channel().await?;
+
         // mutable access to the assembler. So we wrap it in an Arc<Mutex<>>.
         let assembler = Arc::new(Mutex::new(ContiguousQueue::new()));
         // Both the initialization step and the result stream need to asynchronous
@@ -137,6 +141,7 @@ impl<A: Send + 'static, B: Send + 'static> Foldable<B> for IndexedStream<A> {
         let sender = Arc::new(Mutex::new(sender));
         // Initialize the dispatcher.
         let dispatcher = Arc::new(Dispatcher::new(
+            m,
             assembler.clone(),
             sender.clone(),
             channel_identifier.clone(),
@@ -165,7 +170,6 @@ impl<A: Send + 'static, B: Send + 'static> Foldable<B> for IndexedStream<A> {
         // of the job by tallying the number of inputs.
         let init = self
             .try_fold(0, |sum, (idx, item)| {
-                let op = m.clone();
                 let dispatcher = dispatcher.clone();
                 let should_dispatch = should_dispatch.clone();
 
@@ -175,7 +179,6 @@ impl<A: Send + 'static, B: Send + 'static> Foldable<B> for IndexedStream<A> {
                     // Because this represents an uncombined input, we set the
                     // range equal to its index.
                     let item_result = TaskOutput {
-                        op,
                         metadata: Metadata { range: idx..=idx },
                         output: item,
                     };
@@ -187,7 +190,7 @@ impl<A: Send + 'static, B: Send + 'static> Foldable<B> for IndexedStream<A> {
                     } else {
                         // Now that we've seen at least two inputs, we can start dispatching.
                         // Notify the result stream that it can start consuming.
-                        should_dispatch.notify_waiters();
+                        should_dispatch.notify_one();
                         // Dispatch the task.
                         dispatcher.try_dispatch(item_result).await?;
                     }
@@ -204,11 +207,10 @@ impl<A: Send + 'static, B: Send + 'static> Foldable<B> for IndexedStream<A> {
                 Ok::<_, anyhow::Error>(size)
             });
 
-        let result_handle = tokio::spawn({
+        let result_handle = {
             let resolved_input_size = resolved_input_size.clone();
             let dispatcher = dispatcher.clone();
             let should_dispatch = should_dispatch.clone();
-            let op = m.clone();
 
             async move {
                 // Wait until at least two inputs have been received.
@@ -218,8 +220,9 @@ impl<A: Send + 'static, B: Send + 'static> Foldable<B> for IndexedStream<A> {
                     let result = result?;
                     // Check to see if the input size is known.
                     if let Some(job_size) = *resolved_input_size.read().await {
-                        // If it is, we can check to see if the result is the final result (i.e.,
-                        // its range comprises the size of the input).
+                        // If it is, we can check to see if the result is the final result
+                        // (i.e., its range comprises the size of
+                        // the input).
                         if result.is_final(job_size) {
                             sender.lock().await.close().await?;
                             return Ok(result.output);
@@ -230,21 +233,17 @@ impl<A: Send + 'static, B: Send + 'static> Foldable<B> for IndexedStream<A> {
                     acker.ack().await?;
                 }
 
-                Ok(op.empty())
+                Ok(m.empty())
             }
-        });
+        };
 
         let size = init.await?;
         match size {
             0 => {
-                // Abort the result handle, as it will never receive a result.
-                result_handle.abort();
                 // If the input is empty, we return the empty element.
                 return Ok(m.empty());
             }
             1 => {
-                // Abort the result handle, as it will never receive a result.
-                result_handle.abort();
                 // If the input has a single element, we return it.
                 // The dispatcher is guaranteed to have queued the single input element at this
                 // point, so we can safely dequeue it. If it doesn't, this is a
@@ -258,6 +257,6 @@ impl<A: Send + 'static, B: Send + 'static> Foldable<B> for IndexedStream<A> {
             _ => {}
         }
 
-        result_handle.await?
+        result_handle.await
     }
 }
