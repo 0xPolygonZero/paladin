@@ -90,6 +90,8 @@
 //! ```
 use std::fmt::Debug;
 
+use bytes::Bytes;
+
 use crate::serializer::{Serializable, Serializer};
 
 /// An operation that is identifiable and executable by the runtime in a
@@ -125,21 +127,21 @@ pub trait Operation: RemoteExecute + Serializable {
     }
 
     /// Get a byte representation of the output.
-    fn output_to_bytes(&self, serializer: Serializer, output: Self::Output) -> Result<Vec<u8>> {
+    fn output_to_bytes(&self, serializer: Serializer, output: Self::Output) -> Result<Bytes> {
         Ok(serializer
             .to_bytes(&output)
             .map_err(|err| FatalError::from_anyhow(err, Default::default()))?)
     }
 
     /// Execute the operation on the given input as bytes.
-    fn execute_as_bytes(&self, serializer: Serializer, input: &[u8]) -> Result<Vec<u8>> {
+    fn execute_as_bytes(&self, serializer: Serializer, input: &[u8]) -> Result<Bytes> {
         self.input_from_bytes(serializer, input)
             .and_then(|input| self.execute(input))
             .and_then(|output| self.output_to_bytes(serializer, output))
     }
 
     /// Get a byte representation of the operation.
-    fn as_bytes(&self, serializer: Serializer) -> Result<Vec<u8>> {
+    fn as_bytes(&self, serializer: Serializer) -> Result<Bytes> {
         let output = serializer
             .to_bytes(self)
             .map_err(|err| FatalError::from_anyhow(err, Default::default()))?;

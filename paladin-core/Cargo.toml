@@ -36,9 +36,9 @@ pin-project = "1.1.3"
 thiserror = "1.0.50"
 backoff = { version = "0.4.0", features = ["tokio"] }
 dashmap = "5.5.3"
-bytes = "1.5.0"
+bytes = { version = "1.5.0", features = ["std", "serde"] }
 crossbeam = "0.8.2"
-postcard = { version = "1.0.8", features = ["alloc"] }
+postcard = { version = "1.0.8", features = ["use-std"] }
 linkme = "0.3.17"
 
 # Local dependencies

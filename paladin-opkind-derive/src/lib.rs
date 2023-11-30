@@ -140,7 +140,7 @@ pub fn operation_derive(input: TokenStream) -> TokenStream {
                         // Serialize the output.
                         let serialized_output = op.output_to_bytes(task.serializer, typed_output)?;
 
-                        Ok(serialized_output) as #paladin_path::operation::Result<Vec<u8>>
+                        Ok(serialized_output) as #paladin_path::operation::Result<#paladin_path::__private::bytes::Bytes>
                     })
                     .await
                     .map_err(|e| #paladin_path::operation::FatalError::new(
@@ -148,7 +148,7 @@ pub fn operation_derive(input: TokenStream) -> TokenStream {
                         #paladin_path::operation::FatalStrategy::Terminate
                     ))??;
 
-                    Ok(output) as #paladin_path::operation::Result<Vec<u8>>
+                    Ok(output) as #paladin_path::operation::Result<#paladin_path::__private::bytes::Bytes>
                 };
 
                 let result = match get_result().await {

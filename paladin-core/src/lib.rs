@@ -223,6 +223,8 @@ pub use paladin_opkind_derive::*;
 #[doc(hidden)]
 pub mod __private {
     #[doc(hidden)]
+    pub use bytes;
+    #[doc(hidden)]
     pub use futures;
     #[doc(hidden)]
     pub use linkme;

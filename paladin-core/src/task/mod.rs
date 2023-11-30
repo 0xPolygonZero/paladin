@@ -7,6 +7,7 @@
 use std::fmt::Debug;
 
 use anyhow::Result;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -66,13 +67,13 @@ pub struct AnyTask {
     /// be sent.
     pub routing_key: Uuid,
     /// Serialized metadata associated with the [`Task`].
-    pub metadata: Vec<u8>,
+    pub metadata: Bytes,
     /// The serialized [`Operation`] to be executed.
-    pub op: Vec<u8>,
+    pub op: Bytes,
     /// The unique identifier of the [`Operation`] to be executed.
     pub operation_id: u8,
     /// Serialized arguments to the [`Operation`].
-    pub input: Vec<u8>,
+    pub input: Bytes,
     /// The [`Serializer`] used to serialize and deserialize the [`Operation`]
     /// arguments.
     pub serializer: Serializer,
@@ -82,9 +83,9 @@ pub struct AnyTask {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct AnyTaskOutput {
     /// Serialized metadata associated with the [`Task`].
-    pub metadata: Vec<u8>,
+    pub metadata: Bytes,
     /// Serialized output of the [`Operation`] execution.
-    pub output: Vec<u8>,
+    pub output: Bytes,
     /// The [`Serializer`] used to serialize and deserialize the [`Operation`].
     pub serializer: Serializer,
 }
