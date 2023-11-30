@@ -289,10 +289,9 @@ pub enum FatalStrategy {
 /// use std::sync::{Arc, atomic::{Ordering, AtomicBool}};
 ///
 /// #[derive(Serialize, Deserialize, Default, RemoteExecute)]
-/// struct Multiply {
-///     #[serde(skip)]
-///     did_try: Arc<AtomicBool>,
-/// }
+/// struct Multiply;
+///
+/// static DID_TRY: AtomicBool = AtomicBool::new(false);
 ///
 /// impl Monoid for Multiply {
 ///     type Elem = i64;
@@ -302,7 +301,7 @@ pub enum FatalStrategy {
 ///     }
 ///
 ///     fn combine(&self, a: Self::Elem, b: Self::Elem) -> Result<Self::Elem> {
-///         if self.did_try.swap(true, Ordering::SeqCst) {
+///         if DID_TRY.swap(true, Ordering::SeqCst) {
 ///             return Ok(a * b);
 ///         }
 ///
@@ -348,12 +347,10 @@ pub enum FatalStrategy {
 /// use serde::{Deserialize, Serialize};
 ///
 /// #[derive(Serialize, Deserialize, Default, RemoteExecute)]
-/// struct Multiply {
-///     #[serde(skip)]
-///     num_tries: Arc<AtomicU32>,
-/// }
+/// struct Multiply;
 ///
-/// const NUM_RETRIES: u32 = 3;
+/// static NUM_TRIES: AtomicU32 = AtomicU32::new(0);
+/// const MAX_TRIES: u32 = 3;
 ///
 /// impl Monoid for Multiply {
 ///     type Elem = i64;
@@ -363,12 +360,12 @@ pub enum FatalStrategy {
 ///     }
 ///
 ///     fn combine(&self, a: Self::Elem, b: Self::Elem) -> Result<Self::Elem> {
-///         let prev = self.num_tries.fetch_add(1, Ordering::SeqCst);
+///         let prev = NUM_TRIES.fetch_add(1, Ordering::SeqCst);
 ///
 ///         TransientError::from_str(
-///             &format!("tried {}/{}", prev, NUM_RETRIES + 1),
+///             &format!("tried {}/{}", prev, MAX_TRIES + 1),
 ///             RetryStrategy::Immediate {
-///                 max_retries: NonZeroU32::new(NUM_RETRIES).unwrap()
+///                 max_retries: NonZeroU32::new(MAX_TRIES).unwrap()
 ///             },
 ///             FatalStrategy::default()
 ///         )
@@ -385,8 +382,8 @@ pub enum FatalStrategy {
 ///
 ///     let expected = format!(
 ///         "Fatal operation error: tried {}/{}",
-///         NUM_RETRIES + 1,
-///         NUM_RETRIES + 1
+///         MAX_TRIES + 1,
+///         MAX_TRIES + 1
 ///     );
 ///     assert_eq!(result.unwrap_err().to_string(), expected);
 /// # Ok(())

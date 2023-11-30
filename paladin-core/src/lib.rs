@@ -227,6 +227,8 @@ pub mod __private {
     #[doc(hidden)]
     pub use linkme;
     #[doc(hidden)]
+    pub use tokio;
+    #[doc(hidden)]
     pub use tracing;
 
     #[doc(hidden)]

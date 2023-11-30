@@ -114,35 +114,47 @@ pub fn operation_derive(input: TokenStream) -> TokenStream {
             #paladin_path::operation::Result<#paladin_path::task::AnyTaskOutput>
         > {
             Box::pin(async move {
-                // Deserialize the operation.
-                let op = #name::from_bytes(task.serializer, &task.op)?;
-
                 // Define the execution logic in a closure so that it can be retried if it fails.
-                let get_result = || {
+                let get_result = || async {
+                    // Deserialize the operation.
+                    let op = #name::from_bytes(task.serializer, &task.op)?;
+
                     // Deserialize the input.
                     let input = op.input_from_bytes(task.serializer, &task.input)?;
                     #paladin_path::__private::tracing::debug!(operation = %stringify!(#name), input = ?input, "executing operation");
 
-                    // Execute the operation, catching panics.
-                    let output = std::panic::catch_unwind(::std::panic::AssertUnwindSafe(||
-                        op.execute(input)
-                    ))
-                    // Convert panics to fatal operation errors.
-                    .map_err(|_| #paladin_path::operation::FatalError::from_str(
-                        &format!("operation panicked"),
+                    // Spawn a blocking task to execute the operation.
+                    let output = #paladin_path::__private::tokio::task::spawn_blocking(move || {
+                        // Execute the operation, catching panics.
+                        let typed_output = std::panic::catch_unwind(::std::panic::AssertUnwindSafe(||
+                            op.execute(input)
+                        ))
+                        // Convert panics to fatal operation errors.
+                        .map_err(|e| #paladin_path::operation::FatalError::from_str(
+                            &format!("operation {} panicked: {e:?}", stringify!(#name)),
+                            #paladin_path::operation::FatalStrategy::Terminate
+                        ))??;
+
+                        // Serialize the output.
+                        let serialized_output = op.output_to_bytes(task.serializer, typed_output)?;
+                        #paladin_path::__private::tracing::debug!(operation = %stringify!(#name), output = ?serialized_output, "operation executed successfully");
+
+                        Ok(serialized_output) as #paladin_path::operation::Result<Vec<u8>>
+                    })
+                    .await
+                    .map_err(|e| #paladin_path::operation::FatalError::new(
+                        e,
                         #paladin_path::operation::FatalStrategy::Terminate
                     ))??;
 
-                    #paladin_path::__private::tracing::debug!(operation = %stringify!(#name), output = ?output, "operation executed successfully");
-
-                    // Serialize the output.
-                    Ok(op.output_to_bytes(task.serializer, output)?) as #paladin_path::operation::Result<Vec<u8>>
+                    Ok(output) as #paladin_path::operation::Result<Vec<u8>>
                 };
 
-                let result = match get_result() {
+                let result = match get_result().await {
                     Err(err) => {
+                        println!("error: {:?}", err);
                         // If the operation failed, it according to the error's retry strategy.
-                        err.retry_trace(move || async move { get_result() }, |e| {
+                        err.retry_trace(get_result, |e| {
                             #paladin_path::__private::tracing::warn!(operation = %stringify!(#name), error = ?e, "transient operation failure");
                         })
                         .await
