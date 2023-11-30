@@ -8,6 +8,7 @@ use std::fmt::Debug;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::{
     __private::OPERATIONS,
@@ -30,7 +31,7 @@ pub struct Task<'a, Op: Operation, Metadata: Serializable> {
     /// The routing key used to identify the
     /// [`Channel`](crate::channel::Channel) to which execution results should
     /// be sent.
-    pub routing_key: String,
+    pub routing_key: Uuid,
     /// Metadata associated with the [`Task`].
     pub metadata: Metadata,
     /// The [`Operation`] to be executed.
@@ -63,7 +64,7 @@ pub struct AnyTask {
     /// The routing key used to identify the
     /// [`Channel`](crate::channel::Channel) to which execution results should
     /// be sent.
-    pub routing_key: String,
+    pub routing_key: Uuid,
     /// Serialized metadata associated with the [`Task`].
     pub metadata: Vec<u8>,
     /// The serialized [`Operation`] to be executed.
@@ -117,7 +118,7 @@ pub enum AnyTaskResult {
 impl<'a, Op: Operation, Metadata: Serializable> Task<'a, Op, Metadata> {
     /// Convert a [`Task`] into an opaque [`AnyTask`].
     pub fn into_any_task(self, serializer: Serializer) -> Result<AnyTask> {
-        let routing_key = self.routing_key.to_string();
+        let routing_key = self.routing_key;
         let metadata = serializer.to_bytes(&self.metadata)?;
         let input = serializer.to_bytes(&self.input)?;
         let op = serializer.to_bytes(self.op)?;

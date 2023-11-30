@@ -20,6 +20,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use futures::{Sink, Stream};
 use pin_project::{pin_project, pinned_drop};
+use uuid::Uuid;
 
 use crate::{acker::Acker, serializer::Serializable};
 
@@ -69,11 +70,11 @@ pub trait ChannelFactory {
 
     /// Retrieve an existing channel. An identifier is provided when a channel
     /// is issued.
-    async fn get(&self, identifier: &str, channel_type: ChannelType) -> Result<Self::Channel>;
+    async fn get(&self, identifier: Uuid, channel_type: ChannelType) -> Result<Self::Channel>;
 
     /// Issue a new channel. An identifier is returned which can be used to
     /// retrieve the channel later in some other process.
-    async fn issue(&self, channel_type: ChannelType) -> Result<(String, Self::Channel)>;
+    async fn issue(&self, channel_type: ChannelType) -> Result<(Uuid, Self::Channel)>;
 }
 
 /// Guard a channel and embed a particular pipe in the lease guard.

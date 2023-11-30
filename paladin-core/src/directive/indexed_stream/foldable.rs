@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use futures::{Sink, SinkExt, StreamExt, TryFutureExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, Notify, RwLock};
+use uuid::Uuid;
 
 use super::IndexedStream;
 use crate::{
@@ -74,7 +75,7 @@ struct Dispatcher<'a, Op: Monoid> {
     op: &'a Op,
     assembler: Arc<Mutex<ContiguousQueue<TaskOutput<Op, Metadata>>>>,
     sender: Arc<Mutex<Sender<'a, Op>>>,
-    channel_identifier: String,
+    channel_identifier: Uuid,
 }
 
 impl<'a, Op: Monoid> Dispatcher<'a, Op> {
@@ -82,7 +83,7 @@ impl<'a, Op: Monoid> Dispatcher<'a, Op> {
         op: &'a Op,
         assembler: Arc<Mutex<ContiguousQueue<TaskOutput<Op, Metadata>>>>,
         sender: Arc<Mutex<Sender<'a, Op>>>,
-        channel_identifier: String,
+        channel_identifier: Uuid,
     ) -> Self {
         Self {
             op,
@@ -113,7 +114,7 @@ impl<'a, Op: Monoid> Dispatcher<'a, Op> {
 
         if let Some((lhs, rhs)) = assembler.acquire_contiguous_pair_or_queue(result) {
             let task = Task {
-                routing_key: self.channel_identifier.clone(),
+                routing_key: self.channel_identifier,
                 metadata: Metadata {
                     range: *lhs.metadata.range.start()..=*rhs.metadata.range.end(),
                 },
@@ -144,7 +145,7 @@ impl<'a, A: Send + 'a, B: Send + 'a> Foldable<'a, B> for IndexedStream<'a, A> {
             m,
             assembler.clone(),
             sender.clone(),
-            channel_identifier.clone(),
+            channel_identifier,
         ));
         // The size of the input is not known until every item in the input stream has
         // been received. We don't want to block result stream consumption

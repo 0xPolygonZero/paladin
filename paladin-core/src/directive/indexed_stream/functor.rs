@@ -33,7 +33,7 @@ impl<'a, A: Send + 'a, B: Send + 'a> Functor<'a, B> for IndexedStream<'a, A> {
         // the output stream will be incomplete.
         let sender_stream = futures::stream::once(async move {
             let mut task_stream = self.map_ok(|(idx, input)| Task {
-                routing_key: channel_identifier.clone(),
+                routing_key: channel_identifier,
                 metadata: Metadata { idx },
                 op,
                 input,
