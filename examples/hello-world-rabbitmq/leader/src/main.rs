@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use dotenvy::dotenv;
-use ops::{CharToString, StringConcat};
+use ops::{register, CharToString, StringConcat};
 use paladin::{
     config::Config,
     directive::{indexed_stream::IndexedStream, Directive},
@@ -23,7 +23,7 @@ async fn main() -> Result<()> {
     init::tracing();
 
     let args = Cli::parse();
-    let runtime = Runtime::from_config(&args.options).await?;
+    let runtime = Runtime::from_config(&args.options, register()).await?;
 
     let input = ['h', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd', '!'];
     let computation = IndexedStream::from(input)

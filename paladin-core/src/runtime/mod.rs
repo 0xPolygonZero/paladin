@@ -117,13 +117,14 @@ pub struct Runtime {
     task_channel: DynamicChannel,
     serializer: Serializer,
     worker_emulator: Option<Vec<JoinHandle<Result<()>>>>,
+    _marker: Marker,
 }
 const TASK_BUS_ROUTING_KEY: Uuid = Uuid::nil();
 const IPC_ROUTING_KEY: Uuid = Uuid::max();
 
 impl Runtime {
     /// Initializes the [`Runtime`] with the provided [`Config`].
-    pub async fn from_config(config: &Config) -> Result<Self> {
+    pub async fn from_config(config: &Config, marker: Marker) -> Result<Self> {
         let channel_factory = DynamicChannelFactory::from_config(config).await?;
         let task_channel = channel_factory
             .get(TASK_BUS_ROUTING_KEY, ChannelType::ExactlyOnce)
@@ -145,6 +146,7 @@ impl Runtime {
             task_channel,
             serializer,
             worker_emulator,
+            _marker: marker,
         })
     }
 
@@ -154,7 +156,7 @@ impl Runtime {
             runtime: crate::config::Runtime::InMemory,
             ..Default::default()
         };
-        Self::from_config(&config).await
+        Self::from_config(&config, Marker).await
     }
 
     /// Spawns an emulator for the worker runtime.
