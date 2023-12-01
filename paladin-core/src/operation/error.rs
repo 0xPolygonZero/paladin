@@ -317,8 +317,7 @@ pub enum FatalStrategy {
 /// #[tokio::main]
 /// async fn main() -> anyhow::Result<()> {
 /// # let runtime = Runtime::in_memory().await?;
-///     let op = Multiply::default();
-///     let computation = IndexedStream::from([1, 2, 3]).fold(&op);
+///     let computation = IndexedStream::from([1, 2, 3]).fold(&Multiply);
 ///     let result = computation.run(&runtime).await?;
 ///
 ///     assert_eq!(result, 6);
@@ -376,16 +375,10 @@ pub enum FatalStrategy {
 /// #[tokio::main]
 /// async fn main() -> anyhow::Result<()> {
 /// # let runtime = Runtime::in_memory().await?;
-///     let op = Multiply::default();
-///     let computation = IndexedStream::from([1, 2, 3]).fold(&op);
+///     let computation = IndexedStream::from([1, 2, 3]).fold(&Multiply);
 ///     let result = computation.run(&runtime).await;
 ///
-///     let expected = format!(
-///         "Fatal operation error: tried {}/{}",
-///         MAX_TRIES + 1,
-///         MAX_TRIES + 1
-///     );
-///     assert_eq!(result.unwrap_err().to_string(), expected);
+///     assert_eq!(NUM_TRIES.load(Ordering::SeqCst), MAX_TRIES + 2);
 /// # Ok(())
 /// }
 #[derive(Error, Debug)]
