@@ -130,8 +130,8 @@ pub fn operation_derive(input: TokenStream) -> TokenStream {
                             op.execute(input)
                         ))
                         // Convert panics to fatal operation errors.
-                        .map_err(|e| #paladin_path::operation::FatalError::from_str(
-                            &format!("operation {} panicked: {e:?}", stringify!(#name)),
+                        .map_err(|_| #paladin_path::operation::FatalError::from_str(
+                            &format!("operation {} panicked", stringify!(#name)),
                             #paladin_path::operation::FatalStrategy::Terminate
                         ))??;
 
