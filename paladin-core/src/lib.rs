@@ -53,17 +53,15 @@
 //! [`Directive`](crate::directive::Directive)s and remotely executed.
 //!
 //! ```
-//! use paladin::operation::{Operation, Result};
-//! # use paladin::opkind_derive::OpKind;
+//! use paladin::{RemoteExecute, operation::{Operation, Result}};
 //! use serde::{Deserialize, Serialize};
 //!
-//! #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+//! #[derive(Serialize, Deserialize, RemoteExecute)]
 //! struct FibAt;
 //!
 //! impl Operation for FibAt {
 //!     type Input = u64;
 //!     type Output = u64;
-//! #    type Kind = MyOps;
 //!   
 //!     fn execute(&self, input: Self::Input) -> Result<Self::Output> {
 //!         match input {
@@ -83,62 +81,9 @@
 //!     }
 //! }
 //!
-//! # #[derive(OpKind, Serialize, Deserialize, Debug, Clone, Copy)]
-//! # enum MyOps {
-//! #   FibAt(FibAt),
-//! # }
 //! # fn main() {
 //! assert_eq!(FibAt.execute(10).unwrap(), 55);
 //! # }
-//! ```
-//!
-//! ### Operation Registry
-//!
-//! To enable remote machines to execute your operations, you must declare a
-//! registry of all available operations. This ensures remote executors can
-//! deserialize and execute them correctly. Paladin provides a macro that wires
-//! up all the necessary machinery on your registry. Registries must be declared
-//! as an enum where the variants are single tuple structs containing the
-//! operation.
-//!
-//! ```
-//! use paladin::{operation::{Operation, Result}, opkind_derive::OpKind};
-//! use serde::{Deserialize, Serialize};
-//!
-//! #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
-//! struct FibAt;
-//!
-//! impl Operation for FibAt {
-//!     // ...
-//! #    type Input = u64;
-//! #    type Output = u64;
-//!     // Associate the operation with the registry type.
-//!     type Kind = MyOps;
-//!     // ...
-//! #  
-//! #    fn execute(&self, input: Self::Input) -> Result<Self::Output> {
-//! #        match input {
-//! #            0 => Ok(0),
-//! #            1 => Ok(1),
-//! #            _ => {
-//! #                let mut a = 0;
-//! #                let mut b = 1;
-//! #                for _ in 2..=input {
-//! #                    let temp = a;
-//! #                    a = b;
-//! #                    b = temp + b;
-//! #                }
-//! #                Ok(b)
-//! #            }
-//! #        }
-//! #    }
-//! }
-//!
-//! // Declare the registry.
-//! #[derive(OpKind, Serialize, Deserialize, Debug, Clone, Copy)]
-//! enum MyOps {
-//!     FibAt(FibAt),
-//! }
 //! ```
 //!
 //! ## Constructing a program
@@ -148,16 +93,15 @@
 //! program.
 //!
 //! ```
-//! # use paladin::{operation::{Operation, Result}, opkind_derive::OpKind};
-//! # use serde::{Deserialize, Serialize};
+//! use paladin::{RemoteExecute, operation::{Operation, Result}};
+//! use serde::{Deserialize, Serialize};
 //! #
-//! # #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+//! # #[derive(Serialize, Deserialize, RemoteExecute)]
 //! # struct FibAt;
 //! #
 //! # impl Operation for FibAt {
 //! #    type Input = u64;
 //! #    type Output = u64;
-//! #    type Kind = MyOps;
 //! #  
 //! #    fn execute(&self, input: Self::Input) -> Result<Self::Output> {
 //! #        match input {
@@ -177,12 +121,6 @@
 //! #    }
 //! # }
 //! #
-//! # #[derive(OpKind, Serialize, Deserialize, Debug, Clone, Copy)]
-//! # enum MyOps {
-//! #    FibAt(FibAt),
-//! #    Sum(Sum),
-//! # }
-//! #
 //! use paladin::{
 //!     operation::Monoid,
 //!     directive::{indexed_stream::IndexedStream, Directive},
@@ -190,11 +128,11 @@
 //! };
 //!
 //! // Define a Sum monoid.
-//! # #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+//! #[derive(Serialize, Deserialize, RemoteExecute)]
 //! struct Sum;
+//!
 //! impl Monoid for Sum {
 //!     type Elem = u64;
-//!     type Kind = MyOps;
 //!
 //!     fn combine(&self, a: Self::Elem, b: Self::Elem) -> Result<Self::Elem> {
 //!        Ok(a + b)
@@ -207,13 +145,13 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
-//!     let runtime = Runtime::in_memory().await.unwrap();
+//!     let runtime = Runtime::in_memory().await?;
 //!     let stream = IndexedStream::from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 //!     // Compute the fibonacci number at each element in the stream with our
 //!     // previously declared `FibAt` operation.
-//!     let fibs = stream.map(FibAt);
+//!     let fibs = stream.map(&FibAt);
 //!     // Sum the fibonacci numbers.
-//!     let sum = fibs.fold(Sum);
+//!     let sum = fibs.fold(&Sum);
 //!
 //!     // Run the computation.
 //!     let result = sum.run(&runtime).await;
@@ -278,9 +216,29 @@ pub mod queue;
 pub mod runtime;
 pub mod serializer;
 pub mod task;
-pub mod opkind_derive {
-    pub use paladin_opkind_derive::*;
-}
 pub use async_trait::async_trait;
-pub use futures;
-pub use tracing;
+pub use paladin_opkind_derive::*;
+
+// Not public API. Used by generated code.
+#[doc(hidden)]
+pub mod __private {
+    #[doc(hidden)]
+    pub use bytes;
+    #[doc(hidden)]
+    pub use futures;
+    #[doc(hidden)]
+    pub use linkme;
+    #[doc(hidden)]
+    pub use tokio;
+    #[doc(hidden)]
+    pub use tracing;
+
+    #[doc(hidden)]
+    #[linkme::distributed_slice]
+    pub static OPERATIONS: [fn(
+        crate::task::AnyTask,
+    ) -> futures::future::BoxFuture<
+        'static,
+        crate::operation::Result<crate::task::AnyTaskOutput>,
+    >];
+}

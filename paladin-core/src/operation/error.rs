@@ -150,20 +150,19 @@ pub enum FatalStrategy {
 ///
 /// ```
 /// use paladin::{
+///     RemoteExecute,
 ///     runtime::Runtime,
 ///     operation::{Operation, Result, FatalError, FatalStrategy},
 ///     directive::{Directive, IndexedStream},
-///     opkind_derive::OpKind
 /// };
 /// use serde::{Deserialize, Serialize};
 ///
-/// #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+/// #[derive(Serialize, Deserialize, RemoteExecute)]
 /// struct WillFail;
 ///
 /// impl Operation for WillFail {
 ///     type Input = i64;
 ///     type Output = i64;
-///     type Kind = MyOps;
 ///     
 ///     fn execute(&self, _: Self::Input) -> Result<Self::Output> {
 ///         FatalError::from_str(
@@ -174,15 +173,11 @@ pub enum FatalStrategy {
 ///     }
 /// }
 ///
-/// #[derive(OpKind, Serialize, Deserialize, Debug, Clone, Copy)]
-/// enum MyOps {
-///     WillFail(WillFail),
-/// }
 ///
 /// #[tokio::main]
 /// async fn main() -> anyhow::Result<()> {
 /// # let runtime = Runtime::in_memory().await?;
-///     let computation = IndexedStream::from([1, 2, 3]).map(WillFail);
+///     let computation = IndexedStream::from([1, 2, 3]).map(&WillFail);
 ///     let result = computation
 ///         .run(&runtime).await?
 ///         .into_values_sorted().await
@@ -197,19 +192,18 @@ pub enum FatalStrategy {
 ///
 /// ```
 /// use paladin::{
+///     RemoteExecute,
 ///     runtime::Runtime,
 ///     operation::{Operation, Monoid, Result, FatalError, FatalStrategy},
 ///     directive::{Directive, IndexedStream},
-///     opkind_derive::OpKind
 /// };
 /// use serde::{Deserialize, Serialize};
 ///
-/// #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+/// #[derive(Serialize, Deserialize, RemoteExecute)]
 /// struct WillFail;
 ///
 /// impl Monoid for WillFail {
 ///     type Elem = i64;
-///     type Kind = MyOps;
 ///
 ///     fn empty(&self) -> Self::Elem {
 ///         0
@@ -224,15 +218,10 @@ pub enum FatalStrategy {
 ///     }
 /// }
 ///
-/// #[derive(OpKind, Serialize, Deserialize, Debug, Clone, Copy)]
-/// enum MyOps {
-///     WillFail(WillFail),
-/// }
-///
 /// #[tokio::main]
 /// async fn main() -> anyhow::Result<()> {
 /// # let runtime = Runtime::in_memory().await?;
-///     let computation = IndexedStream::from([1, 2, 3]).fold(WillFail);
+///     let computation = IndexedStream::from([1, 2, 3]).fold(&WillFail);
 ///     let result = computation.run(&runtime).await;
 ///
 ///     assert_eq!(result.unwrap_err().to_string(), "Fatal operation error: This operation will always fail.");
@@ -244,19 +233,18 @@ pub enum FatalStrategy {
 ///
 /// ```
 /// use paladin::{
+///     RemoteExecute,
 ///     runtime::Runtime,
 ///     operation::{Operation, Monoid, Result},
 ///     directive::{Directive, IndexedStream, indexed_stream::try_from_into_iterator},
-///     opkind_derive::OpKind
 /// };
 /// use serde::{Deserialize, Serialize};
 ///
-/// #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+/// #[derive(Serialize, Deserialize, RemoteExecute)]
 /// struct Multiply;
 ///
 /// impl Monoid for Multiply {
 ///     type Elem = i64;
-///     type Kind = MyOps;
 ///
 ///     fn empty(&self) -> Self::Elem {
 ///         0
@@ -267,18 +255,13 @@ pub enum FatalStrategy {
 ///     }
 /// }
 ///
-/// #[derive(OpKind, Serialize, Deserialize, Debug, Clone, Copy)]
-/// enum MyOps {
-///     Multiply(Multiply),
-/// }
-///
 /// #[tokio::main]
 /// async fn main() -> anyhow::Result<()> {
 /// # let runtime = Runtime::in_memory().await?;
 ///     let computation = try_from_into_iterator([
 ///         Ok(1), Err(anyhow::anyhow!("Failure")), Ok(3)
 ///     ])
-///     .fold(Multiply);
+///     .fold(&Multiply);
 ///     let result = computation.run(&runtime).await;
 ///
 ///     assert_eq!(result.unwrap_err().to_string(), "Failure");
@@ -289,6 +272,7 @@ pub enum FatalStrategy {
 /// ### A [`TransientError`] recovering after retry:
 /// ```
 /// use paladin::{
+///     RemoteExecute,
 ///     runtime::Runtime,
 ///     operation::{
 ///         Operation,
@@ -300,27 +284,24 @@ pub enum FatalStrategy {
 ///         FatalStrategy
 ///     },
 ///     directive::{Directive, IndexedStream},
-///     opkind_derive::OpKind
 /// };
 /// use serde::{Deserialize, Serialize};
 /// use std::sync::{Arc, atomic::{Ordering, AtomicBool}};
 ///
-/// #[derive(Serialize, Deserialize, Debug, Clone, Default)]
-/// struct Multiply {
-///     #[serde(skip)]
-///     did_try: Arc<AtomicBool>,
-/// }
+/// #[derive(Serialize, Deserialize, Default, RemoteExecute)]
+/// struct Multiply;
+///
+/// static DID_TRY: AtomicBool = AtomicBool::new(false);
 ///
 /// impl Monoid for Multiply {
 ///     type Elem = i64;
-///     type Kind = MyOps;
 ///
 ///     fn empty(&self) -> Self::Elem {
 ///         0
 ///     }
 ///
 ///     fn combine(&self, a: Self::Elem, b: Self::Elem) -> Result<Self::Elem> {
-///         if self.did_try.swap(true, Ordering::SeqCst) {
+///         if DID_TRY.swap(true, Ordering::SeqCst) {
 ///             return Ok(a * b);
 ///         }
 ///
@@ -333,15 +314,10 @@ pub enum FatalStrategy {
 ///     }
 /// }
 ///
-/// #[derive(OpKind, Serialize, Deserialize, Debug, Clone)]
-/// enum MyOps {
-///     Multiply(Multiply),
-/// }
-///
 /// #[tokio::main]
 /// async fn main() -> anyhow::Result<()> {
 /// # let runtime = Runtime::in_memory().await?;
-///     let computation = IndexedStream::from([1, 2, 3]).fold(Multiply::default());
+///     let computation = IndexedStream::from([1, 2, 3]).fold(&Multiply);
 ///     let result = computation.run(&runtime).await?;
 ///
 ///     assert_eq!(result, 6);
@@ -354,6 +330,7 @@ pub enum FatalStrategy {
 /// use std::{num::NonZeroU32, sync::{Arc, atomic::{Ordering, AtomicU32}}};
 ///
 /// use paladin::{
+///     RemoteExecute,
 ///     runtime::Runtime,
 ///     operation::{
 ///         Operation,
@@ -365,33 +342,29 @@ pub enum FatalStrategy {
 ///         FatalStrategy
 ///     },
 ///     directive::{Directive, IndexedStream},
-///     opkind_derive::OpKind
 /// };
 /// use serde::{Deserialize, Serialize};
 ///
-/// #[derive(Serialize, Deserialize, Debug, Clone, Default)]
-/// struct Multiply {
-///     #[serde(skip)]
-///     num_tries: Arc<AtomicU32>,
-/// }
+/// #[derive(Serialize, Deserialize, Default, RemoteExecute)]
+/// struct Multiply;
 ///
-/// const NUM_RETRIES: u32 = 3;
+/// static NUM_TRIES: AtomicU32 = AtomicU32::new(0);
+/// const MAX_TRIES: u32 = 3;
 ///
 /// impl Monoid for Multiply {
 ///     type Elem = i64;
-///     type Kind = MyOps;
 ///
 ///     fn empty(&self) -> Self::Elem {
 ///         0
 ///     }
 ///
 ///     fn combine(&self, a: Self::Elem, b: Self::Elem) -> Result<Self::Elem> {
-///         let prev = self.num_tries.fetch_add(1, Ordering::SeqCst);
+///         let prev = NUM_TRIES.fetch_add(1, Ordering::SeqCst);
 ///
 ///         TransientError::from_str(
-///             &format!("tried {}/{}", prev, NUM_RETRIES + 1),
+///             &format!("tried {}/{}", prev, MAX_TRIES + 1),
 ///             RetryStrategy::Immediate {
-///                 max_retries: NonZeroU32::new(NUM_RETRIES).unwrap()
+///                 max_retries: NonZeroU32::new(MAX_TRIES).unwrap()
 ///             },
 ///             FatalStrategy::default()
 ///         )
@@ -399,24 +372,13 @@ pub enum FatalStrategy {
 ///     }
 /// }
 ///
-/// #[derive(OpKind, Serialize, Deserialize, Debug, Clone)]
-/// enum MyOps {
-///     Multiply(Multiply),
-/// }
-///
 /// #[tokio::main]
 /// async fn main() -> anyhow::Result<()> {
 /// # let runtime = Runtime::in_memory().await?;
-///     let op = Multiply::default();
-///     let computation = IndexedStream::from([1, 2, 3]).fold(op.clone());
+///     let computation = IndexedStream::from([1, 2, 3]).fold(&Multiply);
 ///     let result = computation.run(&runtime).await;
 ///
-///     let expected = format!(
-///         "Fatal operation error: tried {}/{}",
-///         NUM_RETRIES + 1,
-///         NUM_RETRIES + 1
-///     );
-///     assert_eq!(result.unwrap_err().to_string(), expected);
+///     assert_eq!(NUM_TRIES.load(Ordering::SeqCst), MAX_TRIES + 2);
 /// # Ok(())
 /// }
 #[derive(Error, Debug)]

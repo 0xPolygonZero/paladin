@@ -79,7 +79,7 @@ use futures::TryFutureExt;
 /// acknowledgement. Implementers of this trait should provide the actual logic
 /// for acknowledging a message in the `ack`  and `nack` methods.
 #[async_trait]
-pub trait Acker: Send + Sync + 'static {
+pub trait Acker: Send + Sync {
     async fn ack(&self) -> Result<()>;
 
     async fn nack(&self) -> Result<()>;

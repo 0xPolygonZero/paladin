@@ -24,9 +24,9 @@ Below is a (contrived) example of how a typical Paladin program looks.
 async fn main() {
     let stream = IndexedStream::from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     // Compute the fibonacci number at each element in the stream.
-    let fibs = stream.map(FibAt);
+    let fibs = stream.map(&FibAt);
     // Sum the fibonacci numbers.
-    let sum = fibs.fold(Sum);
+    let sum = fibs.fold(&Sum);
 
     // Run the computation.
     let result = sum.run(&runtime).await.unwrap();

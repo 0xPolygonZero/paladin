@@ -20,6 +20,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use futures::{Sink, Stream};
 use pin_project::{pin_project, pinned_drop};
+use uuid::Uuid;
 
 use crate::{acker::Acker, serializer::Serializable};
 
@@ -43,17 +44,17 @@ pub enum ChannelType {
 /// is needed.
 #[async_trait]
 pub trait Channel {
-    type Sender<T: Serializable>: Sink<T>;
+    type Sender<'a, T: Serializable + 'a>: Sink<T>;
     type Acker: Acker;
-    type Receiver<T: Serializable>: Stream<Item = (T, Self::Acker)>;
+    type Receiver<'a, T: Serializable + 'a>: Stream<Item = (T, Self::Acker)>;
 
     async fn close(&self) -> Result<()>;
 
     /// Acquire the sender side of the channel.
-    async fn sender<T: Serializable>(&self) -> Result<Self::Sender<T>>;
+    async fn sender<'a, T: Serializable + 'a>(&self) -> Result<Self::Sender<'a, T>>;
 
     /// Acquire the receiver side of the channel.
-    async fn receiver<T: Serializable>(&self) -> Result<Self::Receiver<T>>;
+    async fn receiver<'a, T: Serializable + 'a>(&self) -> Result<Self::Receiver<'a, T>>;
 
     /// Mark the channel for release.
     fn release(&self);
@@ -69,11 +70,11 @@ pub trait ChannelFactory {
 
     /// Retrieve an existing channel. An identifier is provided when a channel
     /// is issued.
-    async fn get(&self, identifier: &str, channel_type: ChannelType) -> Result<Self::Channel>;
+    async fn get(&self, identifier: Uuid, channel_type: ChannelType) -> Result<Self::Channel>;
 
     /// Issue a new channel. An identifier is returned which can be used to
     /// retrieve the channel later in some other process.
-    async fn issue(&self, channel_type: ChannelType) -> Result<(String, Self::Channel)>;
+    async fn issue(&self, channel_type: ChannelType) -> Result<(Uuid, Self::Channel)>;
 }
 
 /// Guard a channel and embed a particular pipe in the lease guard.

@@ -144,7 +144,7 @@ impl ExactlyOnceQueue {
     }
 
     fn publish<PayloadTarget: Serializable>(&self, payload: &PayloadTarget) -> Result<()> {
-        let bytes = Bytes::from(self.serializer.to_bytes(payload)?);
+        let bytes = self.serializer.to_bytes(payload)?;
         self.messages.push(bytes.clone());
         self.num_messages.add_permits(1);
         Ok(())
@@ -239,7 +239,7 @@ impl BroadcastQueue {
     }
 
     fn publish<PayloadTarget: Serializable>(&self, payload: &PayloadTarget) -> Result<()> {
-        let bytes = Bytes::from(self.serializer.to_bytes(payload)?);
+        let bytes = self.serializer.to_bytes(payload)?;
         // Assign a unique message ID to the message such that consumers can
         // track which messages they've seen.
         let message_id = self.message_counter.fetch_add(1, Ordering::Relaxed);

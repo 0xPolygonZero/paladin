@@ -20,24 +20,6 @@
 //! is provided. An [`Operation`] is strictly more general than a [`Monoid`], so
 //! we can trivially derive an [`Operation`] for every [`Monoid`].
 //!
-//! ## [`OpKind`]
-//! A trait used to create a registry of all available operations.It's used to
-//! facilitate serialization, deserialization, and remote dynamic execution of
-//! operations.
-//!
-//! # Notes
-//!
-//! - Operations are monomorphic over their implementing type. This is
-//!   illustrated by the fact that the `Input` and `Output` types are
-//!   _associated_ types of the [`Operation`] trait. This obviates the need to
-//!   make [`OpKind`] enums generic and thus simplifies downstream code by
-//!   removing the need for threading generic parameters through the system. It
-//!   is, however, possible to implement [`Operation`]s for generic types. see
-//!   the [example](#defining-a-polymorphic-monoid). They just must be
-//!   monomorphized in the enum definition. It is not yet clear that
-//!   polymorphism at the level of [`OpKind`] needed. This may change as the
-//!   system sees more use, in which case we can revisit this design decision.
-//!
 //! # Usage:
 //! Operations are the semantic building blocks of the system. They define what
 //! computations can be performed by the system. By implementing the
@@ -50,40 +32,33 @@
 //! ### Defining an [`Operation`]:
 //!
 //! ```
-//! use paladin::{operation::{Operation, Result}, opkind_derive::OpKind};
+//! use paladin::{RemoteExecute, operation::{Operation, Result}};
 //! use serde::{Deserialize, Serialize};
 //!
-//! #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+//! #[derive(Serialize, Deserialize, RemoteExecute)]
 //! struct StringLength;
 //!
 //! impl Operation for StringLength {
 //!     type Input = String;
 //!     type Output = usize;
-//!     type Kind = MyOps;
 //!     
 //!     fn execute(&self, input: Self::Input) -> Result<Self::Output> {
 //!         Ok(input.len())
 //!     }
-//! }
-//!
-//! #[derive(OpKind, Serialize, Deserialize, Debug, Clone, Copy)]
-//! enum MyOps {
-//!    StringLength(StringLength),
 //! }
 //! ```
 //!
 //! ### Defining a [`Monoid`]:
 //!
 //! ```
-//! use paladin::{operation::{Monoid, Operation, Result}, opkind_derive::OpKind};
+//! use paladin::{RemoteExecute, operation::{Monoid, Operation, Result}};
 //! use serde::{Deserialize, Serialize};
 //!
-//! #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+//! #[derive(Serialize, Deserialize, RemoteExecute)]
 //! struct StringConcat;
 //!
 //! impl Monoid for StringConcat {
 //!     type Elem = String;
-//!     type Kind = MyOps;
 //!     
 //!     fn combine(&self, a: Self::Elem, b: Self::Elem) -> Result<Self::Elem> {
 //!         Ok(a + &b)
@@ -93,140 +68,53 @@
 //!         String::new()
 //!     }
 //! }
-//!
-//! #[derive(OpKind, Serialize, Deserialize, Debug, Clone, Copy)]
-//! enum MyOps {
-//!    StringConcat(StringConcat),
-//! }
 //! ```
 //!
 //! ### An [`Operation`] with constructor arguments:
 //!
 //! ```
-//! use paladin::{operation::{Monoid, Operation, Result}, opkind_derive::OpKind};
+//! use paladin::{RemoteExecute, operation::{Monoid, Operation, Result}};
 //! use serde::{Deserialize, Serialize};
 //!
-//! #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+//! #[derive(Serialize, Deserialize, RemoteExecute)]
 //! struct MultiplyBy(i32);
 //!
 //! impl Operation for MultiplyBy {
 //!     type Input = i32;
 //!     type Output = i32;
-//!     type Kind = MyOps;
 //!     
 //!     fn execute(&self, input: Self::Input) -> Result<Self::Output> {
 //!         Ok(self.0 * input)
 //!     }
 //! }
-//!
-//! #[derive(OpKind, Serialize, Deserialize, Debug, Clone, Copy)]
-//! enum MyOps {
-//!     MultiplyBy(MultiplyBy),
-//! }
 //! ```
-//!
-//! ### Defining a polymorphic [`Monoid`]:
-//!
-//! ```
-//! use paladin::{
-//!     operation::{Monoid, Operation, Result},
-//!     opkind_derive::OpKind,
-//!     serializer::Serializable,
-//! };
-//! use serde::{Deserialize, Serialize};
-//! use std::{ops::Mul, fmt::Debug};
-//! use num_traits::One;
-//!
-//! #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default)]
-//! struct GenericMultiplication<T>(std::marker::PhantomData<T>);
-//!
-//! impl<T: Mul<Output = T> + One + Serializable + Debug + Clone> Monoid for GenericMultiplication<T>
-//! where
-//!     MyOps: From<GenericMultiplication<T>>,
-//! {
-//!     type Elem = T;
-//!     type Kind = MyOps;
-//!
-//!     fn empty(&self) -> Self::Elem {
-//!         T::one()
-//!     }
-//!
-//!     fn combine(&self, a: Self::Elem, b: Self::Elem) -> Result<Self::Elem> {
-//!         Ok(a * b)
-//!     }
-//! }
-//!
-//! #[derive(OpKind, Serialize, Deserialize, Debug, Clone, Copy)]
-//! enum MyOps {
-//!     // Monomorphize
-//!     GenericMultiplicationI32(GenericMultiplication<i32>),
-//!     GenericMultiplicationI64(GenericMultiplication<i64>),
-//! }
-//! ```
-//!
-//! Later on ...
-//! ```
-//! # use paladin::{
-//! #    operation::{Monoid, Operation, Result},
-//! #    opkind_derive::OpKind,
-//! #    serializer::Serializable,
-//! # };
-//! # use serde::{Deserialize, Serialize};
-//! # use std::{ops::Mul, fmt::Debug};
-//! # use num_traits::One;
-//! #
-//! # #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default)]
-//! # struct GenericMultiplication<T>(std::marker::PhantomData<T>);
-//! #
-//! # impl<T: Mul<Output = T> + One + Serializable + Debug + Clone> Monoid for GenericMultiplication<T>
-//! # where
-//! #    MyOps: From<GenericMultiplication<T>>,
-//! # {
-//! #    type Elem = T;
-//! #    type Kind = MyOps;
-//! #
-//! #    fn empty(&self) -> Self::Elem {
-//! #        T::one()
-//! #    }
-//! #
-//! #    fn combine(&self, a: Self::Elem, b: Self::Elem) -> Result<Self::Elem> {
-//! #        Ok(a * b)
-//! #    }
-//! # }
-//! #
-//! # #[derive(OpKind, Serialize, Deserialize, Debug, Clone, Copy)]
-//! # enum MyOps {
-//! #    // Monomorphize
-//! #    GenericMultiplicationI32(GenericMultiplication<i32>),
-//! #    GenericMultiplicationI64(GenericMultiplication<i64>),
-//! # }
-//! #
-//! use paladin::{
-//!     directive::{IndexedStream, Directive},
-//! };
-//!
-//! #[tokio::main]
-//! async fn main() {
-//!     let computation = IndexedStream::from([1, 2, 3, 4, 5, 6])
-//!         .fold(GenericMultiplication::<i32>::default());
-//! }
-//! ```
-
 use std::fmt::Debug;
 
+use bytes::Bytes;
+
 use crate::serializer::{Serializable, Serializer};
+
+/// An operation that is identifiable and executable by the runtime in a
+/// distributed environment.
+///
+/// It is used to facilitate serialization, deserialization, and dynamic
+/// execution of operations.
+///
+/// These will be automatically implemented by the
+/// [`RemoteExecute`](crate::RemoteExecute) derive macro.
+pub trait RemoteExecute {
+    const ID: u8;
+}
 
 /// An operation that can be performed by a worker.
 ///
 /// Akin to a function that maps an input to an output, it defines the signature
 /// and semantics of a computation.
-pub trait Operation: Serializable + Clone + Debug + Into<Self::Kind> {
+pub trait Operation: RemoteExecute + Serializable {
     /// The input type of the operation.
     type Input: Serializable + Debug;
     /// The output type of the operation.
     type Output: Serializable + Debug;
-    /// The operation registry type.
-    type Kind: OpKind;
 
     /// Execute the operation on the given input.
     fn execute(&self, input: Self::Input) -> Result<Self::Output>;
@@ -239,66 +127,42 @@ pub trait Operation: Serializable + Clone + Debug + Into<Self::Kind> {
     }
 
     /// Get a byte representation of the output.
-    fn output_to_bytes(&self, serializer: Serializer, output: Self::Output) -> Result<Vec<u8>> {
+    fn output_to_bytes(&self, serializer: Serializer, output: Self::Output) -> Result<Bytes> {
         Ok(serializer
             .to_bytes(&output)
             .map_err(|err| FatalError::from_anyhow(err, Default::default()))?)
     }
 
     /// Execute the operation on the given input as bytes.
-    fn execute_as_bytes(&self, serializer: Serializer, input: &[u8]) -> Result<Vec<u8>> {
+    fn execute_as_bytes(&self, serializer: Serializer, input: &[u8]) -> Result<Bytes> {
         self.input_from_bytes(serializer, input)
             .and_then(|input| self.execute(input))
             .and_then(|output| self.output_to_bytes(serializer, output))
     }
 
     /// Get a byte representation of the operation.
-    fn as_bytes(&self, serializer: Serializer) -> Result<Vec<u8>> {
+    fn as_bytes(&self, serializer: Serializer) -> Result<Bytes> {
         let output = serializer
             .to_bytes(self)
             .map_err(|err| FatalError::from_anyhow(err, Default::default()))?;
         Ok(output)
     }
+
+    fn from_bytes(serializer: Serializer, input: &[u8]) -> Result<Self> {
+        let this = serializer
+            .from_bytes(input)
+            .map_err(|err| FatalError::from_anyhow(err, Default::default()))?;
+        Ok(this)
+    }
 }
 
-/// A registry of all available operations.
-///
-/// Implementations MUST be an enum. The implementation should group all
-/// available [`Operation`]s into a single registry. This enables operations to
-/// be serialized and executed by a remote service in an opaque manner. In
-/// particular, the remote service need not know the exact type of operation,
-/// but rather, only the _kind_ of possible operations.
-///
-/// Note that a [`Runtime`](crate::runtime::Runtime) instance expects to be
-/// specialized with an [`OpKind`] type -- this is what enables dynamic
-/// execution behavior across all available operations.
-///
-/// # Design rationale
-/// In a world where operations are all executed in the same process, `Box<dyn
-/// Operation>` would theoretically suffice. However, in a distributed system,
-/// we need to serialize operations and send them back and forth between remote
-/// machines. Generic trait object serialization / deserialization is
-/// non-trivial and is not supported by [`serde`] out of the box. Solutions
-/// like <https://docs.rs/typetag> were explored, but, unfortunately, they do
-/// not support generic types.
-///
-/// A `proc_macro_derive` is provided to simplify the process of facilitating
-/// opaque execution of operations, [`crate::opkind_derive`]. It is highly
-/// recommended to use this derive macro to implement [`OpKind`] for your
-/// operation registry, as there are a lot of boilerplate details that need to
-/// be taken care of.
-pub trait OpKind: Serializable + Clone + Debug {}
-
 /// An associative binary [`Operation`].
-pub trait Monoid: Serializable + Clone + Debug + Into<Self::Kind> {
+pub trait Monoid: RemoteExecute + Serializable {
     /// The type of the elements that can be combined by the operation.
     /// Note that unlike an [`Operation`], a [`Monoid`] is a binary operation on
     /// elements of the same type. As such, it does not have distinct
     /// `Input` and `Output` types, but rather, a single `Elem` type.
     type Elem: Serializable + Debug;
-
-    /// The operation registry type.
-    type Kind: OpKind;
 
     /// Get the identity element of the operation. Practically, this will be
     /// used when attempting to fold over a collection of elements, and that
@@ -320,12 +184,121 @@ where
     /// The output type is a single, combined, element of the same type.
     type Output = T::Elem;
 
-    type Kind = T::Kind;
-
     /// Execute the operation on the given input.
     fn execute(&self, (a, b): Self::Input) -> Result<Self::Output> {
         self.combine(a, b)
     }
+}
+
+/// Marker types for [`Operation`]s.
+pub mod marker {
+    /// A [`Marker`] that can be used like [`Phantom`](std::marker::PhantomData)
+    /// to force module inclusion of [`Operation`](super::Operation)
+    /// implementations.
+    #[derive(Clone, Copy)]
+    pub struct Marker;
+}
+
+/// Generate an operation registry for external crates.
+///
+/// This macro generates a `register()` function that can be used to force
+/// module inclusion of [`Operation`] implementations.
+///
+/// Note this is only necessary for operations that are defined in a crate
+/// external to the worker runtime instantiation. If the operations are defined
+/// in the same crate as the worker runtime instantiation, then the operations
+/// will naturally be included in the worker runtime binary.
+///
+/// The `register()` function must be defined _within_ the external operations
+/// module such that it is imported and called _from_ the worker module. This
+/// scheme ensures that the compiler does not exclude the external operations
+/// from its compilation.
+///
+/// **You will have problems if your operations are defined in a separate crate
+/// from your worker runtime and you do not call this macro from within your
+/// operation module.**
+///
+/// # Example
+/// Let's say you have a workspace with the following structure:
+/// ```text
+/// my_workspace
+/// ├── my_operations
+/// │   ├── Cargo.toml
+/// │   └── src
+/// │       └── lib.rs
+/// └── my_worker
+///    ├── Cargo.toml
+///    └── src
+///         └── main.rs
+/// ```
+///
+/// In `my_operations`, you define your operations:
+/// ```
+/// use paladin::{registry, RemoteExecute, operation::{Operation, Result}};
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Serialize, Deserialize, RemoteExecute)]
+/// struct MyOperation;
+///
+/// impl Operation for MyOperation {
+///     type Input = ();
+///     type Output = ();
+///     
+///     fn execute(&self, _input: Self::Input) -> Result<Self::Output> {
+///         Ok(())
+///     }
+/// }
+///
+/// // A `register()` function is generated and exported by the `registry!()` macro.
+/// // This must be called from within the operation module.
+/// registry!();
+/// ```
+///
+/// In `my_worker`, you instantiate the worker runtime:
+/// ```
+/// # mod my_operations {
+/// #    use paladin::{registry, RemoteExecute, operation::{Operation, Result}};
+/// #    use serde::{Deserialize, Serialize};
+/// #
+/// #    #[derive(Serialize, Deserialize, RemoteExecute)]
+/// #    struct MyOperation;
+/// #
+/// #    impl Operation for MyOperation {
+/// #        type Input = ();
+/// #        type Output = ();
+/// #    
+/// #        fn execute(&self, _input: Self::Input) -> Result<Self::Output> {
+/// #            Ok(())
+/// #        }
+/// #    }
+/// #
+/// #    registry!();
+/// # }
+/// #
+/// use paladin::{runtime::WorkerRuntime, config::{Config, Runtime}};
+/// use my_operations::register;
+///
+/// #[tokio::main]
+/// async fn main() -> anyhow::Result<()> {
+///     let config = Config {
+///         runtime: Runtime::InMemory,
+///         ..Default::default()
+///     };
+///
+///     let runtime = WorkerRuntime::from_config(&config, register()).await?;
+///
+///     Ok(())
+/// }
+/// ```
+#[macro_export]
+macro_rules! registry {
+    () => {
+        /// Register external operations with the runtime.
+        #[inline(never)]
+        pub fn register() -> ::paladin::operation::marker::Marker {
+            ::paladin::operation::marker::Marker
+        }
+    };
 }
 
 mod error;

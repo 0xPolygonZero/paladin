@@ -1,6 +1,6 @@
 [package]
 name = "paladin-core"
-version = "0.3.3"
+version = "0.4.0"
 description = "A Rust distributed algorithm toolkit. Write distributed algorithms without the complexities of distributed systems programming."
 license.workspace = true
 edition.workspace = true
@@ -30,15 +30,16 @@ serde = "1.0.183"
 async-trait = "0.1.73"
 ciborium = "0.2.1"
 futures = "0.3.28"
-uuid = { version = "1.4.1", features = ["v4", "fast-rng"] }
+uuid = { version = "1.6.1", features = ["v4", "fast-rng", "serde"] }
 clap = { version = "4.4.2", features = ["derive", "env"] }
 pin-project = "1.1.3"
 thiserror = "1.0.50"
 backoff = { version = "0.4.0", features = ["tokio"] }
 dashmap = "5.5.3"
-bytes = "1.5.0"
+bytes = { version = "1.5.0", features = ["std", "serde"] }
 crossbeam = "0.8.2"
-postcard = { version = "1.0.8", features = ["alloc"] }
+postcard = { version = "1.0.8", features = ["use-std"] }
+linkme = "0.3.17"
 
 # Local dependencies
 paladin-opkind-derive = { path = "../paladin-opkind-derive" }

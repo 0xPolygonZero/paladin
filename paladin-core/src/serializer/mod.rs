@@ -32,7 +32,8 @@
 //! ```
 
 use anyhow::Result;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use bytes::{BufMut, Bytes, BytesMut};
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::config::{self, Config};
@@ -44,8 +45,8 @@ use crate::config::{self, Config};
 /// hence the requirements for `Send`, `Sync`, and `Unpin`. As such, it's
 /// recommended to use owned types for serialization and deserialization to
 /// ensure compatibility with this trait.
-pub trait Serializable: Serialize + DeserializeOwned + Send + Sync + Unpin + 'static {}
-impl<T> Serializable for T where T: Serialize + DeserializeOwned + Send + Sync + Unpin + 'static {}
+pub trait Serializable: Serialize + for<'de> Deserialize<'de> + Send + Sync + Unpin {}
+impl<T> Serializable for T where T: Serialize + for<'de> Deserialize<'de> + Send + Sync + Unpin {}
 
 /// Provides a unified interface for serializing and deserializing binary data.
 ///
@@ -72,15 +73,16 @@ impl std::fmt::Display for Serializer {
 impl Serializer {
     /// Serializes the given value into binary data using the specified format.
     #[instrument(skip(value), level = "trace")]
-    pub fn to_bytes<T: Serialize>(&self, value: &T) -> Result<Vec<u8>> {
-        match self {
-            Self::Postcard => Ok(postcard::to_allocvec(value)?),
+    pub fn to_bytes<T: Serialize>(&self, value: &T) -> Result<Bytes> {
+        let mut buf = BytesMut::new().writer();
+        let buf = match self {
+            Self::Postcard => postcard::to_io(value, buf)?,
             Self::Cbor => {
-                let mut result = Vec::new();
-                ciborium::into_writer(value, &mut result)?;
-                Ok(result)
+                ciborium::into_writer(value, &mut buf)?;
+                buf
             }
-        }
+        };
+        Ok(buf.into_inner().freeze())
     }
 
     /// Deserializes the given binary data into a value of the specified type

@@ -34,7 +34,7 @@ use crate::{
 ///   Rust's type system, ensuring type safety during polymorphic composition
 ///   and benefiting from static dispatch.
 #[async_trait]
-pub trait Directive: Send {
+pub trait Directive {
     type Input;
     type Output;
 
@@ -48,35 +48,29 @@ pub trait Directive: Send {
     /// Computing the length of a stream of strings:
     /// ```
     /// # use paladin::{
+    /// #    RemoteExecute,
     /// #    operation::{Operation, Result},
     /// #    directive::{Directive, IndexedStream},
-    /// #    opkind_derive::OpKind,
     /// #    runtime::Runtime,
     /// # };
     /// # use serde::{Deserialize, Serialize};
     /// #
-    /// # #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+    /// # #[derive(Deserialize, Serialize, RemoteExecute)]
     /// struct Length;
     /// impl Operation for Length {
     ///     type Input = String;
     ///     type Output = usize;
-    ///     type Kind = MyOps;
     ///
     ///     fn execute(&self, input: String) -> Result<usize> {
     ///         Ok(input.len())
     ///     }
     /// }
-    /// #
-    /// # #[derive(OpKind, Copy, Clone, Debug, Deserialize, Serialize)]
-    /// # enum MyOps {
-    /// #    Length(Length),
-    /// # }
     ///
     /// # #[tokio::main]
     /// # async fn main() -> anyhow::Result<()> {
     /// # let runtime = Runtime::in_memory().await?;
     /// let input = ["hel", "lo", " world", "!"].iter().map(|s| s.to_string());
-    /// let computation = IndexedStream::from(input).map(Length);
+    /// let computation = IndexedStream::from(input).map(&Length);
     /// let result = computation.run(&runtime).await?;
     /// // The output is an indexed stream, convert it into a sorted vec
     /// let vec_result = result.into_values_sorted().await?
@@ -92,34 +86,28 @@ pub trait Directive: Send {
     ///
     /// ```
     /// # use paladin::{
+    /// #    RemoteExecute,
     /// #    operation::{Operation, Result},
     /// #    directive::{Directive, IndexedStream},
-    /// #    opkind_derive::OpKind,
     /// #    runtime::Runtime,
     /// # };
     /// # use serde::{Deserialize, Serialize};
     /// #
-    /// # #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+    /// # #[derive(Deserialize, Serialize, RemoteExecute)]
     /// struct MultiplyBy(i32);
     /// impl Operation for MultiplyBy {
     ///     type Input = i32;
     ///     type Output = i32;
-    ///     type Kind = MyOps;
     ///
     ///     fn execute(&self, input: i32) -> Result<i32> {
     ///         Ok(self.0 * input)
     ///     }
     /// }
-    /// #
-    /// # #[derive(OpKind, Copy, Clone, Debug, Deserialize, Serialize)]
-    /// # enum MyOps {
-    /// #    MultiplyBy(MultiplyBy),
-    /// # }
     ///
     /// # #[tokio::main]
     /// # async fn main() -> anyhow::Result<()> {
     /// # let runtime = Runtime::in_memory().await?;
-    /// let computation = IndexedStream::from([1, 2, 3, 4, 5]).map(MultiplyBy(2));
+    /// let computation = IndexedStream::from([1, 2, 3, 4, 5]).map(&MultiplyBy(2));
     /// let result = computation.run(&runtime).await?;
     /// // The output is an indexed stream, convert it into a sorted vec
     /// let vec_result = result.into_values_sorted().await?
@@ -130,10 +118,10 @@ pub trait Directive: Send {
     /// # Ok(())
     /// # }
     /// ```
-    fn map<Op, F>(self, op: Op) -> Map<Op, F, Self>
+    fn map<'a, Op, F>(self, op: &'a Op) -> Map<'a, Op, Self>
     where
         Op: Operation,
-        F: Functor<Op::Output, A = Op::Input>,
+        F: Functor<'a, Op::Output, A = Op::Input>,
         Self: Sized + Directive<Output = F>,
     {
         Map { op, input: self }
@@ -145,18 +133,17 @@ pub trait Directive: Send {
     /// # Example
     /// ```
     /// # use paladin::{
+    /// #    RemoteExecute,
     /// #    operation::{Operation, Monoid, Result},
     /// #    directive::{Directive, IndexedStream},
-    /// #    opkind_derive::OpKind,
     /// #    runtime::Runtime,
     /// # };
     /// # use serde::{Deserialize, Serialize};
     /// #
-    /// # #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+    /// # #[derive(Deserialize, Serialize, RemoteExecute)]
     /// struct Multiply;
     /// impl Monoid for Multiply {
     ///     type Elem = i32;
-    ///     type Kind = MyOps;
     ///
     ///     fn combine(&self, a: i32, b: i32) -> Result<i32> {
     ///         Ok(a * b)
@@ -166,25 +153,20 @@ pub trait Directive: Send {
     ///         1
     ///     }
     /// }
-    /// #
-    /// # #[derive(OpKind, Copy, Clone, Debug, Deserialize, Serialize)]
-    /// # enum MyOps {
-    /// #    Multiply(Multiply),
-    /// # }
     ///
     /// # #[tokio::main]
     /// # async fn main() -> anyhow::Result<()> {
     /// # let runtime = Runtime::in_memory().await?;
-    /// let computation = IndexedStream::from([1, 2, 3, 4, 5]).fold(Multiply);
+    /// let computation = IndexedStream::from([1, 2, 3, 4, 5]).fold(&Multiply);
     /// let result = computation.run(&runtime).await?;
     /// assert_eq!(result, 120);
     /// # Ok(())
     /// # }
     /// ```
-    fn fold<M, F>(self, m: M) -> Fold<M, F, Self>
+    fn fold<'a, M, F>(self, m: &'a M) -> Fold<'a, M, Self>
     where
         M: Monoid,
-        F: Foldable<M::Elem, A = M::Elem>,
+        F: Foldable<'a, M::Elem, A = M::Elem>,
         Self: Sized + Directive<Output = F>,
     {
         Fold { m, input: self }
@@ -226,6 +208,17 @@ macro_rules! impl_lit {
             }
         }
     };
+    ($struct_name:ident<$lifetime:tt, $($generics:ident),+>) => {
+        #[async_trait::async_trait]
+        impl<$lifetime, $($generics: Send),+> $crate::directive::Directive for $struct_name<$lifetime, $($generics),+> {
+            type Input = Self;
+            type Output = Self;
+
+            async fn run(self, _: &$crate::runtime::Runtime) -> anyhow::Result<Self::Output> {
+                Ok(self)
+            }
+        }
+    };
 }
 
 /// Higher kinded type (HKT) trait.
@@ -251,6 +244,12 @@ macro_rules! impl_hkt {
             type Target = $t<U>;
         }
     };
+    ($t: ident<$lifetime:tt>) => {
+        impl<$lifetime, T: $lifetime, U: $lifetime> $crate::directive::HKT<U> for $t<$lifetime, T> {
+            type A = T;
+            type Target = $t<$lifetime, U>;
+        }
+    };
 }
 
 /// A [`Functor`] represents some type that can be mapped over.
@@ -263,8 +262,8 @@ macro_rules! impl_hkt {
 /// [`Option`] will always return an [`Option`] -- it is _structure preserving_
 /// -- only the value contained within the [`Option`] is touched.
 #[async_trait]
-pub trait Functor<B>: HKT<B> {
-    async fn f_map<Op>(self, op: Op, runtime: &Runtime) -> Result<Self::Target>
+pub trait Functor<'a, B>: HKT<B> {
+    async fn f_map<Op>(self, op: &'a Op, runtime: &Runtime) -> Result<Self::Target>
     where
         Op: Operation<Input = Self::A, Output = B>;
 }
@@ -283,8 +282,8 @@ pub trait Functor<B>: HKT<B> {
 /// [`Functor`], but rather a [`Directive`] that outputs a [`Functor`]. This is
 /// what allows us to chain [`Directive`]s together, as the output of one
 /// [`Directive`] is the input to the next.
-pub struct Map<Op: Operation, F: Functor<Op::Output, A = Op::Input>, D: Directive<Output = F>> {
-    op: Op,
+pub struct Map<'a, Op, D> {
+    op: &'a Op,
     input: D,
 }
 
@@ -294,8 +293,12 @@ pub struct Map<Op: Operation, F: Functor<Op::Output, A = Op::Input>, D: Directiv
 /// returning the input [`Functor`], and then mapping the given [`Operation`]
 /// over it.
 #[async_trait]
-impl<Op: Operation, F: Functor<Op::Output, A = Op::Input> + Send, D: Directive<Output = F>>
-    Directive for Map<Op, F, D>
+impl<
+        'a,
+        Op: Operation,
+        F: Functor<'a, Op::Output, A = Op::Input> + Send,
+        D: Directive<Output = F> + Send,
+    > Directive for Map<'a, Op, D>
 {
     type Input = F;
     type Output = F::Target;
@@ -315,8 +318,8 @@ impl<Op: Operation, F: Functor<Op::Output, A = Op::Input> + Send, D: Directive<O
 /// Implementing types must be higher kinded, in that they must be
 /// parameterized by some other type(s).
 #[async_trait]
-pub trait Foldable<B>: HKT<B> {
-    async fn f_fold<M>(self, m: M, runtime: &Runtime) -> Result<Self::A>
+pub trait Foldable<'a, B>: HKT<B> {
+    async fn f_fold<M>(self, m: &'a M, runtime: &Runtime) -> Result<Self::A>
     where
         M: Monoid<Elem = Self::A>;
 }
@@ -336,8 +339,8 @@ pub trait Foldable<B>: HKT<B> {
 /// [`Foldable`], but rather a [`Directive`] that outputs a [`Foldable`]. This
 /// is what allows us to chain [`Directive`]s together, as the output of one
 /// [`Directive`] is the input to the next.
-pub struct Fold<M: Monoid, F: Foldable<M::Elem, A = M::Elem>, D: Directive<Output = F>> {
-    m: M,
+pub struct Fold<'a, M, D> {
+    m: &'a M,
     input: D,
 }
 
@@ -347,8 +350,12 @@ pub struct Fold<M: Monoid, F: Foldable<M::Elem, A = M::Elem>, D: Directive<Outpu
 /// returning the input [`Foldable`], and then folding the given [`Monoid`]
 /// over it.
 #[async_trait]
-impl<M: Monoid, F: Foldable<M::Elem, A = M::Elem> + Send, D: Directive<Output = F>> Directive
-    for Fold<M, F, D>
+impl<
+        'a,
+        M: Monoid,
+        F: Foldable<'a, M::Elem, A = M::Elem> + Send,
+        D: Directive<Output = F> + Send,
+    > Directive for Fold<'a, M, D>
 {
     type Input = F;
     type Output = M::Elem;

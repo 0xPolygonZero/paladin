@@ -48,15 +48,13 @@
 //!   asynchronous processing.
 
 use std::{
-    collections::VecDeque,
     pin::Pin,
     task::{Context, Poll},
 };
 
 use anyhow::Result;
-use futures::{ready, FutureExt, Sink};
+use futures::{future::BoxFuture, ready, stream::FuturesOrdered, FutureExt, Sink, StreamExt};
 use pin_project::pin_project;
-use tokio::task::JoinHandle;
 
 use crate::{queue::QueueHandle, serializer::Serializable};
 
@@ -64,13 +62,13 @@ use crate::{queue::QueueHandle, serializer::Serializable};
 /// Abstracts away a Queue dependency from the caller such they may simply
 /// require a [`Sink`].
 #[pin_project]
-pub struct QueueSink<Data, Handle> {
+pub struct QueueSink<'a, Data, Handle> {
     _phantom: std::marker::PhantomData<Data>,
     queue_handle: Handle,
-    send_futures: VecDeque<JoinHandle<Result<()>>>,
+    send_futures: FuturesOrdered<BoxFuture<'a, Result<()>>>,
 }
 
-impl<Data, Handle> QueueSink<Data, Handle> {
+impl<'a, Data, Handle> QueueSink<'a, Data, Handle> {
     /// Create a new [`QueueSink`] instance from a [`QueueHandle`].
     ///
     ///
@@ -103,15 +101,15 @@ impl<Data, Handle> QueueSink<Data, Handle> {
         Self {
             _phantom: std::marker::PhantomData,
             queue_handle,
-            send_futures: VecDeque::new(),
+            send_futures: FuturesOrdered::new(),
         }
     }
 }
 
-impl<Data, Handle> Sink<Data> for QueueSink<Data, Handle>
+impl<'a, Data, Handle> Sink<Data> for QueueSink<'a, Data, Handle>
 where
-    Data: Serializable,
-    Handle: QueueHandle + Send + Sync + 'static,
+    Data: Serializable + 'a,
+    Handle: QueueHandle + Send + Sync + 'a,
 {
     type Error = anyhow::Error;
 
@@ -126,30 +124,24 @@ where
         Poll::Ready(Ok(()))
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
-        let this = self.get_mut();
-
-        while let Some(future) = this.send_futures.front_mut() {
-            match future.poll_unpin(cx) {
-                Poll::Ready(result) => {
-                    this.send_futures.pop_front();
-                    if let Err(e) = result {
-                        return Poll::Ready(Err(e.into()));
-                    }
-                }
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
+        loop {
+            match self.send_futures.poll_next_unpin(cx) {
+                Poll::Ready(Some(Err(e))) => return Poll::Ready(Err(e)),
+                Poll::Ready(Some(Ok(_))) => continue,
+                Poll::Ready(None) => return Poll::Ready(Ok(())),
                 Poll::Pending => return Poll::Pending,
             }
         }
-
-        Poll::Ready(Ok(()))
     }
 
     fn start_send(self: Pin<&mut Self>, item: Data) -> Result<()> {
         let this = self.get_mut();
         let queue_handle = this.queue_handle.clone();
 
-        let fut = tokio::spawn(async move { queue_handle.publish(&item).await });
-        this.send_futures.push_back(fut);
+        let fut = async move { queue_handle.publish(&item).await };
+        this.send_futures.push_back(fut.boxed());
+
         Ok(())
     }
 }
