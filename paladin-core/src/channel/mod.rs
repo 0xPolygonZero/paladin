@@ -18,11 +18,11 @@ use std::{
 
 use anyhow::Result;
 use async_trait::async_trait;
-use futures::{Sink, Stream};
+use futures::Stream;
 use pin_project::{pin_project, pinned_drop};
 use uuid::Uuid;
 
-use crate::{acker::Acker, serializer::Serializable};
+use crate::{acker::Acker, queue::Publisher, serializer::Serializable};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChannelType {
@@ -44,7 +44,7 @@ pub enum ChannelType {
 /// is needed.
 #[async_trait]
 pub trait Channel {
-    type Sender<'a, T: Serializable + 'a>: Sink<T>;
+    type Sender<'a, T: Serializable + 'a>: Publisher<T>;
     type Acker: Acker;
     type Receiver<'a, T: Serializable + 'a>: Stream<Item = (T, Self::Acker)>;
 

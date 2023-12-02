@@ -321,7 +321,7 @@ impl<
 pub trait Foldable<'a, B>: HKT<B> {
     async fn f_fold<M>(self, m: &'a M, runtime: &Runtime) -> Result<Self::A>
     where
-        M: Monoid<Elem = Self::A>;
+        M: Monoid<Elem = Self::A> + 'static;
 }
 
 /// A representation of an arbitrary [`Foldable`] fold.
@@ -352,7 +352,7 @@ pub struct Fold<'a, M, D> {
 #[async_trait]
 impl<
         'a,
-        M: Monoid,
+        M: Monoid + 'static,
         F: Foldable<'a, M::Elem, A = M::Elem> + Send,
         D: Directive<Output = F> + Send,
     > Directive for Fold<'a, M, D>

@@ -7,6 +7,8 @@
 //! queue declaration, queue consumption, and message publishing are the only
 //! operations that are supported.
 
+use std::fmt::Debug;
+
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::Stream;
@@ -87,12 +89,16 @@ pub trait Connection: Clone {
 pub trait QueueHandle: Clone {
     type Acker: Acker;
     type Consumer<T: Serializable>: Stream<Item = (T, Self::Acker)>;
+    type Publisher<T: Serializable>: Publisher<T>;
 
-    /// Publish a message to the queue.
-    ///
-    /// The implementation should be take care of serializing the payload before
-    /// publishing.
-    async fn publish<PayloadTarget: Serializable>(&self, payload: &PayloadTarget) -> Result<()>;
+    fn publisher<PayloadTarget: Serializable>(&self) -> Self::Publisher<PayloadTarget>;
+
+    async fn publish<PayloadTarget: Serializable>(&self, payload: &PayloadTarget) -> Result<()>
+    where
+        Self::Publisher<PayloadTarget>: Send,
+    {
+        self.publisher().publish(payload).await
+    }
 
     /// Declare a queue consumer.
     async fn declare_consumer<PayloadTarget: Serializable>(
@@ -103,4 +109,5 @@ pub trait QueueHandle: Clone {
 
 pub mod amqp;
 pub mod in_memory;
-pub mod sink;
+mod publisher;
+pub use publisher::*;

@@ -1,10 +1,20 @@
-use std::{ops::RangeInclusive, sync::Arc};
+use std::{
+    ops::RangeInclusive,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 use anyhow::Result;
 use async_trait::async_trait;
-use futures::{Sink, SinkExt, StreamExt, TryFutureExt, TryStreamExt};
+use crossbeam::atomic::AtomicCell;
+use futures::{
+    channel::mpsc::{self, Sender},
+    try_join, SinkExt, StreamExt, TryFutureExt, TryStreamExt,
+};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, Notify, RwLock};
+use tokio::{select, sync::Notify};
 use uuid::Uuid;
 
 use super::IndexedStream;
@@ -12,6 +22,7 @@ use crate::{
     contiguous::{Contiguous, ContiguousQueue},
     directive::Foldable,
     operation::{Monoid, Operation},
+    queue::PublisherExt,
     runtime::Runtime,
     task::{Task, TaskOutput},
 };
@@ -57,9 +68,6 @@ impl<Op: Operation> Contiguous for TaskOutput<Op, Metadata> {
     }
 }
 
-type Sender<'a, Op> =
-    Box<dyn Sink<Task<'a, Op, Metadata>, Error = anyhow::Error> + Send + Unpin + 'a>;
-
 /// A [`Dispatcher`] abstracts over the common functionality of queuing and
 /// dispatching contiguous [`Task`]s to worker processes.
 ///
@@ -71,38 +79,22 @@ type Sender<'a, Op> =
 /// - Dequeuing [`TaskResult`]s.
 /// - Attempting to dispatch [`TaskResult`]s if they are contiguous with another
 ///   [`TaskResult`].
-struct Dispatcher<'a, Op: Monoid> {
-    op: &'a Op,
-    assembler: Arc<Mutex<ContiguousQueue<TaskOutput<Op, Metadata>>>>,
-    sender: Arc<Mutex<Sender<'a, Op>>>,
+struct Dispatcher<'a, M: Monoid> {
+    m: &'a M,
+    assembler: Arc<ContiguousQueue<TaskOutput<M, Metadata>>>,
+    tx: Sender<Task<'a, M, Metadata>>,
     channel_identifier: Uuid,
 }
 
-impl<'a, Op: Monoid> Dispatcher<'a, Op> {
-    fn new(
-        op: &'a Op,
-        assembler: Arc<Mutex<ContiguousQueue<TaskOutput<Op, Metadata>>>>,
-        sender: Arc<Mutex<Sender<'a, Op>>>,
-        channel_identifier: Uuid,
-    ) -> Self {
-        Self {
-            op,
-            assembler,
-            sender,
-            channel_identifier,
-        }
-    }
-
+impl<'a, Op: Monoid + 'static> Dispatcher<'a, Op> {
     /// Queue the given [`TaskResult`].
     async fn queue(&self, result: TaskOutput<Op, Metadata>) {
-        let mut assembler = self.assembler.lock().await;
-        assembler.queue(result);
+        self.assembler.queue(result);
     }
 
     /// Dequeue the [`TaskResult`] at the given index.
     async fn dequeue(&self, idx: &usize) -> Option<TaskOutput<Op, Metadata>> {
-        let mut assembler = self.assembler.lock().await;
-        assembler.dequeue(idx)
+        self.assembler.dequeue(idx)
     }
 
     /// Attempt to dispatch the given [`TaskResult`].
@@ -110,70 +102,78 @@ impl<'a, Op: Monoid> Dispatcher<'a, Op> {
     /// If the given [`TaskResult`] is contiguous with another [`TaskResult`],
     /// then the two are combined and dispatched for further combination.
     async fn try_dispatch(&self, result: TaskOutput<Op, Metadata>) -> Result<()> {
-        let mut assembler = self.assembler.lock().await;
-
-        if let Some((lhs, rhs)) = assembler.acquire_contiguous_pair_or_queue(result) {
+        if let Some((lhs, rhs)) = self.assembler.acquire_contiguous_pair_or_queue(result) {
             let task = Task {
                 routing_key: self.channel_identifier,
                 metadata: Metadata {
                     range: *lhs.metadata.range.start()..=*rhs.metadata.range.end(),
                 },
-                op: self.op,
+                op: self.m,
                 input: (lhs.output, rhs.output),
             };
-            let mut sender = self.sender.lock().await;
-            sender.send(task).await?;
+            let mut tx = self.tx.clone();
+            tx.send(task).await?;
         }
 
         Ok(())
     }
 }
 
-#[async_trait]
-impl<'a, A: Send + 'a, B: Send + 'a> Foldable<'a, B> for IndexedStream<'a, A> {
-    async fn f_fold<M: Monoid<Elem = A>>(self, m: &'a M, runtime: &Runtime) -> Result<A> {
-        let (channel_identifier, sender, mut receiver) =
-            runtime.lease_coordinated_task_channel().await?;
+/// Maximum concurrent operations per task.
+///
+/// This heuristic restricts the number of simultaneous operations on a _single_
+/// task to prevent any single task from monopolizing the thread pool. In other
+/// words, we want to ensure as many disparate tasks make progress concurrently
+/// with each other as possible.
+///
+/// In the future, it may be worth making this configurable.
+const MAX_CONCURRENCY_PER_TASK: usize = 10;
 
-        // mutable access to the assembler. So we wrap it in an Arc<Mutex<>>.
-        let assembler = Arc::new(Mutex::new(ContiguousQueue::new()));
-        // Both the initialization step and the result stream need to asynchronous
-        // mutable access to the sender. So we wrap it in an Arc<Mutex<>>.
-        let sender = Arc::new(Mutex::new(sender));
-        // Initialize the dispatcher.
-        let dispatcher = Arc::new(Dispatcher::new(
+#[async_trait]
+impl<'a, A: Send + Sync + 'a, B: Send + 'a> Foldable<'a, B> for IndexedStream<'a, A> {
+    async fn f_fold<M: Monoid<Elem = A>>(self, m: &'a M, runtime: &Runtime) -> Result<A>
+    where
+        M: 'static,
+    {
+        let (channel_identifier, sender, receiver) =
+            runtime.lease_coordinated_task_channel().await?;
+        // Rather than dispatching tasks directly on `sender`, we instead dispatch them
+        // on a channel. This allows us to consume tasks as a stream rather than
+        // awaiting each publish individually.
+        let (mut tx, rx) = mpsc::channel::<Task<'a, M, Metadata>>(MAX_CONCURRENCY_PER_TASK);
+        let assembler = Arc::new(ContiguousQueue::new());
+        let sender = Arc::new(sender);
+        let dispatcher = Arc::new(Dispatcher {
             m,
-            assembler.clone(),
-            sender.clone(),
+            assembler: assembler.clone(),
+            tx: tx.clone(),
             channel_identifier,
-        ));
-        // The size of the input is not known until every item in the input stream has
-        // been received. We don't want to block result stream consumption
-        // waiting for the initialization future to finish, as there
-        // may be a significant delay if the input operations take a long time to
-        // compute. As such, we provide this `resolved_input_size`, which is an
-        // `RwLock` over an `Option<usize>`. If the lock contains a `Some`, then
-        // the initialization has completed and the size is known.
-        // If it contains a None, then the initialization has not completed, and the
-        // total size is not yet known.
-        let resolved_input_size = Arc::new(RwLock::new(None as Option<usize>));
+        });
         // Messages shouldn't be dispatched to worker processes until at least two
         // messages have been received, as there is no work to do if there are
         // fewer than 2 items in the input. If the input is empty, we simply
         // return the empty element. If the input has a single element, we
         // simply return it.
         let should_dispatch = Arc::new(Notify::new());
-
-        let resolved_size_clone = resolved_input_size.clone();
+        // The running count of inputs.
+        let count = Arc::new(AtomicUsize::new(0));
+        // The size of the input is not known until every item in the input stream has
+        // been received. We don't want to block result stream consumption waiting for
+        // the initialization future to finish, as there may be a significant delay if
+        // the input operations take a long time to compute. As such, we provide this
+        // `resolved_input_size`, which is an [`AtomicUsize`]. If it contains
+        // [`usize::MAX`], then the initialization has not completed, and the total size
+        // is not yet known.
+        let resolved_input_size = Arc::new(AtomicUsize::new(usize::MAX));
 
         // Initialize the assembler, dispatching tasks as contiguous pairs become
         // available. We're doing double duty here, as we also compute the size
         // of the job by tallying the number of inputs.
         let init = self
-            .try_fold(0, |sum, (idx, item)| {
+            .try_for_each_concurrent(MAX_CONCURRENCY_PER_TASK, |(idx, item)| {
                 let dispatcher = dispatcher.clone();
                 let should_dispatch = should_dispatch.clone();
-
+                let count = count.clone();
                 async move {
                     // Given that the operation is a monoid, and input type must match output type,
                     // we can safely place the input into a `TaskResult`.
@@ -184,7 +184,7 @@ impl<'a, A: Send + 'a, B: Send + 'a> Foldable<'a, B> for IndexedStream<'a, A> {
                         output: item,
                     };
 
-                    let next_sum = sum + 1;
+                    let next_sum = count.fetch_add(1, Ordering::Relaxed) + 1;
                     if next_sum < 2 {
                         // Do not attempt a dispatch if we've seen fewer than two inputs.
                         dispatcher.queue(item_result).await;
@@ -197,67 +197,103 @@ impl<'a, A: Send + 'a, B: Send + 'a> Foldable<'a, B> for IndexedStream<'a, A> {
                     }
 
                     // Tally the number of inputs.
-                    Ok::<_, anyhow::Error>(next_sum)
+                    Ok::<_, anyhow::Error>(())
                 }
             })
-            .and_then(|size| async move {
-                // Once the above future has completed, the size of the job is known.
-                // We can place the final value in `resolved_job_size`.
-                let mut lock = resolved_size_clone.write().await;
-                *lock = Some(size);
-                Ok::<_, anyhow::Error>(size)
+            .and_then({
+                let count = count.clone();
+                let dispatcher = dispatcher.clone();
+                let resolved_input_size = resolved_input_size.clone();
+                |_| {
+                    async move {
+                        // Once the above future has completed, the size of the job is known.
+                        // We can place the final value in `resolved_job_size`.
+                        let size = count.load(Ordering::Relaxed);
+                        resolved_input_size.store(size, Ordering::Release);
+                        match size {
+                            // If the input is empty, we return the empty element.
+                            0 => Ok(m.empty()),
+                            // If the input has a single element, we return it.
+                            //
+                            // The dispatcher is guaranteed to have queued the single input element
+                            // at this point, so we can safely dequeue it. If it doesn't, this is a
+                            // logic error.
+                            1 => Ok(dispatcher
+                                .dequeue(&0)
+                                .await
+                                .expect("Expected dispatcher to have a single element at index 0")
+                                .output),
+                            // Otherwise, we wait for the result stream to complete.
+                            _ => futures::future::pending().await,
+                        }
+                    }
+                }
             });
 
-        let result_handle = {
-            let resolved_input_size = resolved_input_size.clone();
+        let (final_result_tx, final_result_rx) = futures::channel::oneshot::channel::<M::Elem>();
+        let result_processor = {
             let dispatcher = dispatcher.clone();
             let should_dispatch = should_dispatch.clone();
+            let final_result_tx = Arc::new(AtomicCell::new(Some(final_result_tx)));
 
             async move {
                 // Wait until at least two inputs have been received.
                 should_dispatch.notified().await;
 
-                while let Some((result, acker)) = receiver.next().await {
-                    let result = result?;
-                    // Check to see if the input size is known.
-                    if let Some(job_size) = *resolved_input_size.read().await {
-                        // If it is, we can check to see if the result is the final result
-                        // (i.e., its range comprises the size of
-                        // the input).
-                        if result.is_final(job_size) {
-                            sender.lock().await.close().await?;
-                            return Ok(result.output);
+                receiver
+                    .map(Ok)
+                    .try_for_each_concurrent(MAX_CONCURRENCY_PER_TASK, |(result, acker)| {
+                        let resolved_input_size = resolved_input_size.clone();
+                        let dispatcher = dispatcher.clone();
+                        let final_result_tx = final_result_tx.clone();
+
+                        async move {
+                            let result = result?;
+                            // Check to see if the input size is known and if the result is the
+                            // final result (i.e., its range comprises the size of the input).
+                            let resolved_size = resolved_input_size.load(Ordering::Acquire);
+                            if usize::MAX != resolved_size && result.is_final(resolved_size) {
+                                acker.ack().await?;
+                                final_result_tx
+                                    .take()
+                                    .ok_or_else(|| anyhow::anyhow!("final result tx taken"))?
+                                    .send(result.output)
+                                    .map_err(|_| anyhow::anyhow!("final result already sent"))?;
+
+                                return Ok::<_, anyhow::Error>(());
+                            }
+
+                            try_join!(dispatcher.try_dispatch(result), acker.ack())?;
+
+                            Ok(())
                         }
-                    }
+                    })
+                    .await?;
 
-                    dispatcher.try_dispatch(result).await?;
-                    acker.ack().await?;
-                }
-
-                Ok(m.empty())
+                unreachable!("Result stream should never complete")
             }
         };
 
-        let size = init.await?;
-        match size {
-            0 => {
-                // If the input is empty, we return the empty element.
-                return Ok(m.empty());
-            }
-            1 => {
-                // If the input has a single element, we return it.
-                // The dispatcher is guaranteed to have queued the single input element at this
-                // point, so we can safely dequeue it. If it doesn't, this is a
-                // logic error.
-                return Ok(dispatcher
-                    .dequeue(&0)
-                    .await
-                    .expect("Expected dispatcher to have a single element at index 0")
-                    .output);
-            }
-            _ => {}
-        }
+        let task_handler = {
+            let sender = sender.clone();
+            async move {
+                sender
+                    .publish_all(rx.map(Ok), MAX_CONCURRENCY_PER_TASK)
+                    .await?;
 
-        result_handle.await
+                futures::future::pending().await
+            }
+        };
+
+        select! {
+            exit_early = init => exit_early,
+            task_handler = task_handler => task_handler,
+            result_processor = result_processor => result_processor,
+            final_result = final_result_rx => {
+                tx.close().await?;
+                sender.close().await?;
+                Ok(final_result?)
+            },
+        }
     }
 }

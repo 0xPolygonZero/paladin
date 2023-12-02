@@ -57,7 +57,8 @@ use pin_project::pin_project;
 use tracing::{error, instrument};
 
 use super::{
-    Connection, DeliveryMode, QueueDurability, QueueHandle, QueueOptions, SyndicationMode,
+    Connection, DeliveryMode, Publisher, QueueDurability, QueueHandle, QueueOptions,
+    SyndicationMode,
 };
 use crate::{
     acker::Acker,
@@ -370,11 +371,22 @@ pub struct AMQPQueueHandle {
     options: QueueOptions,
 }
 
-#[async_trait]
-impl QueueHandle for AMQPQueueHandle {
-    type Acker = AMQPAcker;
-    type Consumer<PayloadTarget: Serializable> = AMQPConsumer<PayloadTarget>;
+pub struct AMQPPublisher<T> {
+    queue_handle: AMQPQueueHandle,
+    _phantom: std::marker::PhantomData<T>,
+}
 
+impl<T> AMQPPublisher<T> {
+    pub fn new(queue_handle: AMQPQueueHandle) -> Self {
+        Self {
+            queue_handle,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+#[async_trait]
+impl<T: Serializable> Publisher<T> for AMQPPublisher<T> {
     /// Publish a message to the queue.
     ///
     /// # Example
@@ -413,11 +425,26 @@ impl QueueHandle for AMQPQueueHandle {
     ///     Ok(())
     /// }
     #[instrument(skip_all, level = "trace")]
-    async fn publish<PayloadTarget: Serializable>(&self, payload: &PayloadTarget) -> Result<()> {
-        match self.options.syndication_mode {
-            SyndicationMode::ExactlyOnce => self.publish_single(payload).await,
-            SyndicationMode::Broadcast => self.publish_broadcast(payload).await,
+    async fn publish(&self, payload: &T) -> Result<()> {
+        match self.queue_handle.options.syndication_mode {
+            SyndicationMode::ExactlyOnce => self.queue_handle.publish_single(payload).await,
+            SyndicationMode::Broadcast => self.queue_handle.publish_broadcast(payload).await,
         }
+    }
+
+    async fn close(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl QueueHandle for AMQPQueueHandle {
+    type Acker = AMQPAcker;
+    type Consumer<PayloadTarget: Serializable> = AMQPConsumer<PayloadTarget>;
+    type Publisher<PayloadTarget: Serializable> = AMQPPublisher<PayloadTarget>;
+
+    fn publisher<PayloadTarget: Serializable>(&self) -> Self::Publisher<PayloadTarget> {
+        AMQPPublisher::new(self.clone())
     }
 
     /// Get a consumer instance to the queue.
