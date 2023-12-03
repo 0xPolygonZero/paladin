@@ -153,7 +153,6 @@ pub fn operation_derive(input: TokenStream) -> TokenStream {
 
                 let result = match get_result().await {
                     Err(err) => {
-                        println!("error: {:?}", err);
                         // If the operation failed, it according to the error's retry strategy.
                         err.retry_trace(get_result, |e| {
                             #paladin_path::__private::tracing::warn!(operation = %stringify!(#name), error = ?e, "transient operation failure");

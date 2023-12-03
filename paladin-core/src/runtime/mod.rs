@@ -55,7 +55,7 @@ use std::{
 
 use anyhow::Result;
 use dashmap::{mapref::entry::Entry, DashMap};
-use futures::{stream::BoxStream, Sink, SinkExt, Stream, StreamExt};
+use futures::{stream::BoxStream, Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::{select, task::JoinHandle, try_join};
 use tracing::{debug_span, error, instrument, trace, warn, Instrument};
@@ -69,12 +69,13 @@ use crate::{
     },
     config::Config,
     operation::{marker::Marker, FatalStrategy, Operation},
+    queue::{Publisher, PublisherExt},
     serializer::{Serializable, Serializer},
     task::{AnyTask, AnyTaskOutput, AnyTaskResult, Task, TaskResult},
 };
 
 type Receiver<'a, Item> = Box<dyn Stream<Item = (Item, Box<dyn Acker>)> + Send + Unpin + 'a>;
-type Sender<'a, Item> = Box<dyn Sink<Item, Error = anyhow::Error> + Send + Unpin + 'a>;
+type Sender<'a, Item> = Box<dyn Publisher<Item> + Send + Unpin + Sync + 'a>;
 type CoordinatedTaskChannel<'a, Op, Metadata> = (
     Uuid,
     Sender<'a, Task<'a, Op, Metadata>>,
@@ -188,7 +189,7 @@ impl Runtime {
         self.task_channel.close().await
     }
 
-    /// Provides a [`Sink`] for dispatching [`Task`]s of the specified
+    /// Provides a [`Publisher`] for dispatching [`Task`]s of the specified
     /// [`Operation`] and its associated `Metadata`.
     ///
     /// This generally shouldn't be used by itself if the caller is interested
@@ -209,17 +210,16 @@ impl Runtime {
     async fn get_task_sender<'a, Op: Operation, Metadata: Serializable + 'a>(
         &self,
     ) -> Result<Sender<'a, Task<'a, Op, Metadata>>> {
-        // Get a sink for the task channel, which accepts `AnyTask`.
-        let sink = self.task_channel.sender::<AnyTask>().await?;
+        // Get a publisher for the task channel, which accepts `AnyTask`.
+        let sender = self.task_channel.sender::<AnyTask>().await?;
         let serializer = self.serializer;
-        // Transform the sink to accept typed `Task`s by serializing them into
+        // Transform the sender to accept typed `Task`s by serializing them into
         // `AnyTask`s on behalf of the caller. This allows the caller to pass in
         // a typed `Task` without having to worry about serialization.
-        let transformed_sink = sink.with(move |task: Task<'a, Op, Metadata>| {
-            Box::pin(async move { task.into_any_task(serializer) })
-        });
+        let transformed_sender =
+            sender.with(move |task: &Task<'_, Op, Metadata>| task.as_any_task(serializer));
 
-        Ok(Box::new(transformed_sink))
+        Ok(Box::new(transformed_sender))
     }
 
     /// Leases a new discrete
@@ -258,7 +258,7 @@ impl Runtime {
     ///     operation::{Operation, Result},
     /// };
     /// use serde::{Deserialize, Serialize};
-    /// use futures::{StreamExt, SinkExt};
+    /// use futures::StreamExt;
     ///
     /// #[derive(Serialize, Deserialize)]
     /// struct Metadata {
@@ -279,7 +279,7 @@ impl Runtime {
     ///     let (identifier, mut sender, mut receiver) = runtime.lease_coordinated_task_channel::<Op, Metadata>().await?;
     ///
     ///     // Issue a task with the identifier of the receiver
-    ///     sender.send(Task {
+    ///     sender.publish(&Task {
     ///         routing_key: identifier,
     ///         metadata: Metadata { id: 0 },
     ///         op,
@@ -411,7 +411,7 @@ impl WorkerRuntime {
         })
     }
 
-    /// Provides a [`Sink`] for dispatching [`AnyTaskResult`]s.
+    /// Provides a [`Publisher`] for dispatching [`AnyTaskResult`]s.
     ///
     /// Typically used by a worker node for send back the results of a [`Task`]
     /// execution.
@@ -420,11 +420,11 @@ impl WorkerRuntime {
         self.channel_factory
             .get(identifier, ChannelType::ExactlyOnce)
             .await?
-            .sender()
+            .sender::<AnyTaskResult>()
             .await
     }
 
-    /// Get a [`Sink`] for dispatching [`WorkerIpc`] messages.
+    /// Get a [`Publisher`] for dispatching [`WorkerIpc`] messages.
     ///
     /// Typically used by a worker node to notify other workers of a fatal
     /// error.
@@ -534,14 +534,13 @@ impl WorkerRuntime {
             FatalStrategy::Ignore => Ok(()),
             FatalStrategy::Terminate => {
                 // Notify other workers of the error.
-                let (mut ipc, mut sender) =
+                let (ipc, sender) =
                     try_join!(self.get_ipc_sender(), self.get_result_sender(routing_key))?;
 
-                try_join!(
-                    ipc.send(WorkerIpc::ExecutionError { routing_key }),
-                    sender.send(AnyTaskResult::Err(err.to_string()))
-                )?;
+                let ipc_msg = WorkerIpc::ExecutionError { routing_key };
+                let sender_msg = AnyTaskResult::Err(err.to_string());
 
+                try_join!(ipc.publish(&ipc_msg), sender.publish(&sender_msg))?;
                 try_join!(ipc.close(), sender.close())?;
 
                 Ok(())
@@ -561,8 +560,8 @@ impl WorkerRuntime {
             output,
         }: ExecutionOk,
     ) -> Result<()> {
-        let mut sender = self.get_result_sender(routing_key).await?;
-        sender.send(AnyTaskResult::Ok(output)).await?;
+        let sender = self.get_result_sender(routing_key).await?;
+        sender.publish(&AnyTaskResult::Ok(output)).await?;
         sender.close().await?;
         Ok(())
     }
@@ -691,7 +690,6 @@ impl WorkerRuntime {
             let routing_key = payload.routing_key;
 
             let span = debug_span!("remote_execute", routing_key = %routing_key.simple());
-            // Spawn a task that will execute the task.
             let execution_task = payload.remote_execute().instrument(span);
 
             // Create a future that will wait for an IPC termination signal.

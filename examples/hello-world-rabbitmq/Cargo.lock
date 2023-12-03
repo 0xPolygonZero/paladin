@@ -575,6 +575,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-skiplist"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "883a5821d7d079fcf34ac55f27a833ee61678110f6b97637cc74513c0d0b42fc"
+dependencies = [
+ "cfg-if",
+ "crossbeam-epoch",
+ "crossbeam-utils",
+ "scopeguard",
+]
+
+[[package]]
 name = "crossbeam-utils"
 version = "0.8.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1183,7 +1195,7 @@ dependencies = [
 
 [[package]]
 name = "paladin-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1192,6 +1204,7 @@ dependencies = [
  "ciborium",
  "clap",
  "crossbeam",
+ "crossbeam-skiplist",
  "dashmap",
  "dotenvy",
  "futures",
@@ -1213,7 +1226,7 @@ dependencies = [
 
 [[package]]
 name = "paladin-opkind-derive"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "quote",
  "syn",

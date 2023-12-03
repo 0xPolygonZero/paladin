@@ -1,6 +1,6 @@
 [package]
 name = "paladin-core"
-version = "0.4.0"
+version = "0.4.1"
 description = "A Rust distributed algorithm toolkit. Write distributed algorithms without the complexities of distributed systems programming."
 license.workspace = true
 edition.workspace = true
@@ -40,6 +40,7 @@ bytes = { version = "1.5.0", features = ["std", "serde"] }
 crossbeam = "0.8.2"
 postcard = { version = "1.0.8", features = ["use-std"] }
 linkme = "0.3.17"
+crossbeam-skiplist = "0.1.1"
 
 # Local dependencies
 paladin-opkind-derive = { path = "../paladin-opkind-derive" }

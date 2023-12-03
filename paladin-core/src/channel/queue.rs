@@ -12,13 +12,12 @@
 //!
 //! ```no_run
 //! use paladin::{
-//!     queue::{Connection, amqp::{AMQPConnection, AMQPConnectionOptions}},
+//!     queue::{Connection, Publisher, amqp::{AMQPConnection, AMQPConnectionOptions}},
 //!     channel::{Channel, ChannelType, ChannelFactory, queue::QueueChannelFactory},
 //! };
 //! use uuid::Uuid;
 //! use serde::{Serialize, Deserialize};
 //! use anyhow::Result;
-//! use futures::SinkExt;
 //!
 //! #[derive(Serialize, Deserialize)]
 //! struct MyStruct {
@@ -41,7 +40,7 @@
 //!     // Get a sender pipe
 //!     let mut sender = channel.sender::<MyStruct>().await?;
 //!     // Dispatch a message
-//!     sender.send(MyStruct { field: "hello world".to_string() }).await?;
+//!     sender.publish(&MyStruct { field: "hello world".to_string() }).await?;
 //!
 //!     Ok(())
 //! }
@@ -94,8 +93,7 @@ use uuid::Uuid;
 use crate::{
     channel::{Channel, ChannelFactory, ChannelType},
     queue::{
-        sink::QueueSink, Connection, DeliveryMode, QueueDurability, QueueHandle, QueueOptions,
-        SyndicationMode,
+        Connection, DeliveryMode, QueueDurability, QueueHandle, QueueOptions, SyndicationMode,
     },
     serializer::Serializable,
 };
@@ -147,7 +145,7 @@ impl<
     > Channel for QueueChannel<Conn>
 {
     type Acker = <QHandle as QueueHandle>::Acker;
-    type Sender<'a, T: Serializable + 'a> = QueueSink<'a, T, QHandle>;
+    type Sender<'a, T: Serializable + 'a> = <QHandle as QueueHandle>::Publisher<T>;
     type Receiver<'a, T: Serializable + 'a> = <QHandle as QueueHandle>::Consumer<T>;
 
     /// Close the underlying connection.
@@ -167,7 +165,8 @@ impl<
                 self.channel_type.into(),
             )
             .await?;
-        Ok(QueueSink::new(queue))
+
+        Ok(queue.publisher())
     }
 
     /// Get a receiver for the underlying queue.

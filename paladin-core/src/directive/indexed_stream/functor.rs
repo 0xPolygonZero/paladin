@@ -1,10 +1,14 @@
+use std::fmt::Debug;
+
 use anyhow::Result;
 use async_trait::async_trait;
-use futures::{SinkExt, StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 
 use super::IndexedStream;
-use crate::{directive::Functor, operation::Operation, runtime::Runtime, task::Task};
+use crate::{
+    directive::Functor, operation::Operation, queue::PublisherExt, runtime::Runtime, task::Task,
+};
 
 /// Metadata for the [`IndexedStream`] functor.
 ///
@@ -17,13 +21,15 @@ struct Metadata {
     idx: usize,
 }
 
+const MAX_CONCURRENCY: usize = 10;
+
 #[async_trait]
-impl<'a, A: Send + 'a, B: Send + 'a> Functor<'a, B> for IndexedStream<'a, A> {
+impl<'a, A: Send + Sync + 'a, B: Send + 'a> Functor<'a, B> for IndexedStream<'a, A> {
     async fn f_map<Op: Operation>(self, op: &'a Op, runtime: &Runtime) -> Result<Self::Target>
     where
         Op: Operation<Input = A, Output = B>,
     {
-        let (channel_identifier, mut sender, receiver) =
+        let (channel_identifier, sender, receiver) =
             runtime.lease_coordinated_task_channel().await?;
 
         // Place the sending task into a stream so that it can be combined with the
@@ -32,14 +38,14 @@ impl<'a, A: Send + 'a, B: Send + 'a> Functor<'a, B> for IndexedStream<'a, A> {
         // while sending tasks means that the entire operation should fail, as
         // the output stream will be incomplete.
         let sender_stream = futures::stream::once(async move {
-            let mut task_stream = self.map_ok(|(idx, input)| Task {
+            let task_stream = self.map_ok(|(idx, input)| Task {
                 routing_key: channel_identifier,
                 metadata: Metadata { idx },
                 op,
                 input,
             });
 
-            sender.send_all(&mut task_stream).await?;
+            sender.publish_all(task_stream, MAX_CONCURRENCY).await?;
             sender.close().await?;
             Ok::<(), anyhow::Error>(())
         })

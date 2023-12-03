@@ -12,7 +12,7 @@
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use futures::{Sink, Stream, StreamExt};
+use futures::{Stream, StreamExt};
 use uuid::Uuid;
 
 use crate::{
@@ -25,6 +25,7 @@ use crate::{
     queue::{
         amqp::{AMQPConnection, AMQPConnectionOptions},
         in_memory::InMemoryConnection,
+        Publisher,
     },
     serializer::{Serializable, Serializer},
 };
@@ -40,8 +41,7 @@ pub enum DynamicChannel {
 #[async_trait]
 impl Channel for DynamicChannel {
     type Acker = Box<dyn Acker>;
-    type Sender<'a, T: Serializable + 'a> =
-        Box<dyn Sink<T, Error = anyhow::Error> + Send + Unpin + 'a>;
+    type Sender<'a, T: Serializable + 'a> = Box<dyn Publisher<T> + Send + Unpin + Sync + 'a>;
     type Receiver<'a, T: Serializable + 'a> =
         Box<dyn Stream<Item = (T, Self::Acker)> + Send + Unpin + 'a>;
 

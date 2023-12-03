@@ -28,7 +28,7 @@ use futures::{ready, Stream};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::PollSemaphore;
 
-use super::{Connection, DeliveryMode, QueueHandle, QueueOptions, SyndicationMode};
+use super::{Connection, DeliveryMode, Publisher, QueueHandle, QueueOptions, SyndicationMode};
 use crate::{
     acker::NoopAcker,
     serializer::{Serializable, Serializer},
@@ -349,6 +349,7 @@ impl BroadcastQueue {
 /// #         DeliveryMode,
 /// #         QueueOptions,
 /// #         QueueHandle,
+/// #         Publisher,
 /// #         in_memory::InMemoryConnection,
 /// #     }
 /// # };
@@ -396,6 +397,7 @@ impl BroadcastQueue {
 /// #         SyndicationMode,
 /// #         DeliveryMode,
 /// #         QueueHandle,
+/// #         Publisher,
 /// #         in_memory::InMemoryConnection
 /// #     }
 /// # };
@@ -464,19 +466,42 @@ impl InMemoryQueueHandle {
     }
 }
 
+pub struct InMemoryPublisher<T> {
+    queue_handle: InMemoryQueueHandle,
+    _marker: std::marker::PhantomData<T>,
+}
+
+impl<T> InMemoryPublisher<T> {
+    pub fn new(queue_handle: InMemoryQueueHandle) -> Self {
+        Self {
+            queue_handle,
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
+#[async_trait]
+impl<T: Serializable> Publisher<T> for InMemoryPublisher<T> {
+    async fn publish(&self, payload: &T) -> Result<()> {
+        match self.queue_handle.options.syndication_mode {
+            SyndicationMode::ExactlyOnce => self.queue_handle.exactly_once_queue.publish(payload),
+            SyndicationMode::Broadcast => self.queue_handle.broadcast_queue.publish(payload),
+        }
+    }
+
+    async fn close(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl QueueHandle for InMemoryQueueHandle {
     type Acker = NoopAcker;
     type Consumer<PayloadTarget: Serializable> = InMemoryConsumer<PayloadTarget>;
+    type Publisher<PayloadTarget: Serializable> = InMemoryPublisher<PayloadTarget>;
 
-    /// Publish a message to the broadcast channel.
-    ///
-    /// This will push the message to all consumers of the broadcast channel.
-    async fn publish<PayloadTarget: Serializable>(&self, payload: &PayloadTarget) -> Result<()> {
-        match self.options.syndication_mode {
-            SyndicationMode::ExactlyOnce => self.exactly_once_queue.publish(payload),
-            SyndicationMode::Broadcast => self.broadcast_queue.publish(payload),
-        }
+    fn publisher<PayloadTarget: Serializable>(&self) -> Self::Publisher<PayloadTarget> {
+        InMemoryPublisher::new(self.clone())
     }
 
     async fn declare_consumer<PayloadTarget: Serializable>(
@@ -644,16 +669,23 @@ mod helpers {
     pub(super) fn publish<H: QueueHandle + Send + Sync + 'static>(
         queue: &H,
         payload: &Payload,
-    ) -> JoinHandle<Result<()>> {
+    ) -> JoinHandle<Result<()>>
+    where
+        <H as QueueHandle>::Publisher<Payload>: Send,
+    {
         let payload = payload.clone();
         let queue = queue.clone();
-        tokio::spawn(async move { queue.publish(&payload).await })
+        let publisher = queue.publisher();
+        tokio::spawn(async move { publisher.publish(&payload).await })
     }
 
     pub(super) fn publish_multi<H: QueueHandle + Send + Sync + 'static>(
         queue: &H,
         payload: &[Payload],
-    ) -> Vec<JoinHandle<Result<()>>> {
+    ) -> Vec<JoinHandle<Result<()>>>
+    where
+        <H as QueueHandle>::Publisher<Payload>: Send,
+    {
         payload.iter().map(|p| publish(queue, p)).collect()
     }
 }
@@ -685,7 +717,8 @@ mod exactly_once {
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn single_message_delivers_once_publish_first() {
         let queue = queue_handle().await;
-        publish(&queue, &new_payload(1));
+        let clone = queue.clone();
+        publish(&clone, &new_payload(1));
 
         let (c1, c2) = consumers(&queue).await;
         let (r1, r2) = (consume_next(c1), consume_next(c2));

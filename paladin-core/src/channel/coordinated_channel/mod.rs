@@ -1,5 +1,5 @@
 //! State coordination between two distinct channel pipes (a
-//! [`Sink`] and a [`Stream`]).
+//! [`Publisher`] and a [`Stream`]).
 //!
 //! Generally when working with channels, the expectation is that closing or
 //! dropping a sender will signal to the receiver that the channel is closed.
@@ -17,11 +17,12 @@ use std::sync::{
     Arc,
 };
 
-use futures::{Sink, Stream};
+use futures::Stream;
 
-use self::{coordinated_sink::CoordinatedSink, coordinated_stream::CoordinatedStream};
+use self::{coordinated_publisher::CoordinatedPublisher, coordinated_stream::CoordinatedStream};
+use crate::queue::Publisher;
 
-pub mod coordinated_sink;
+pub mod coordinated_publisher;
 pub mod coordinated_stream;
 
 /// The shared state between the sender and receiver of a coordinated channel.
@@ -50,7 +51,7 @@ impl ChannelState {
 }
 
 /// State coordination between two distinct channel pipes (a
-/// [`Sink`] and a [`Stream`]).
+/// [`Publisher`] and a [`Stream`]).
 ///
 /// Generally when working with channels, the expectation is that closing or
 /// dropping a sender will signal to the receiver that the channel is closed.
@@ -61,17 +62,12 @@ impl ChannelState {
 ///
 /// [`coordinated_channel`] solves these problems by binding the sender and
 /// receiver to a shared state that tracks sender closure and pending sends.
-pub fn coordinated_channel<
-    A,
-    B,
-    Sender: Sink<A, Error = anyhow::Error>,
-    Receiver: Stream<Item = B>,
->(
+pub fn coordinated_channel<A, B, Sender: Publisher<A>, Receiver: Stream<Item = B>>(
     sender: Sender,
     receiver: Receiver,
-) -> (CoordinatedSink<A, Sender>, CoordinatedStream<Receiver>) {
+) -> (CoordinatedPublisher<A, Sender>, CoordinatedStream<Receiver>) {
     let state = Arc::new(ChannelState::new());
-    let sender = CoordinatedSink::new(sender, state.clone());
+    let sender = CoordinatedPublisher::new(sender, state.clone());
     let receiver = CoordinatedStream::new(receiver, state.clone());
 
     (sender, receiver)

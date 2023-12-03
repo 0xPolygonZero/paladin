@@ -1,6 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use futures::{SinkExt, StreamExt};
+use futures::StreamExt;
 
 use super::Literal;
 use crate::{directive::Functor, operation::Operation, runtime::Runtime, task::Task};
@@ -12,7 +12,7 @@ impl<'a, A: Send, B: Send> Functor<'a, B> for Literal<A> {
         op: &'a Op,
         runtime: &Runtime,
     ) -> Result<Self::Target> {
-        let (channel_identifier, mut sender, mut receiver) =
+        let (channel_identifier, sender, mut receiver) =
             runtime.lease_coordinated_task_channel().await?;
 
         let task = Task {
@@ -22,7 +22,7 @@ impl<'a, A: Send, B: Send> Functor<'a, B> for Literal<A> {
             input: self.0,
         };
 
-        sender.send(task).await?;
+        sender.publish(&task).await?;
         sender.close().await?;
 
         if let Some((result, acker)) = receiver.next().await {
