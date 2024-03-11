@@ -207,7 +207,7 @@ impl Runtime {
     /// [`Directive`](crate::directive::Directive) needs to coordinate the
     /// results of multiple [`Task`]s.
     #[instrument(skip_all, level = "debug")]
-    async fn get_task_sender<'a, Op: Operation, Metadata: Serializable + 'a>(
+    async fn get_task_sender<'a, Op: Operation + 'a, Metadata: Serializable + 'a>(
         &self,
     ) -> Result<Sender<'a, Task<'a, Op, Metadata>>> {
         // Get a publisher for the task channel, which accepts `AnyTask`.
@@ -305,7 +305,11 @@ impl Runtime {
     /// [`Directive`](crate::directive::Directive) needs to coordinate the
     /// results of multiple [`Task`]s.
     #[instrument(skip_all, level = "debug")]
-    pub async fn lease_coordinated_task_channel<'a, Op: Operation, Metadata: Serializable + 'a>(
+    pub async fn lease_coordinated_task_channel<
+        'a,
+        Op: Operation + 'a,
+        Metadata: Serializable + 'a,
+    >(
         &self,
     ) -> Result<CoordinatedTaskChannel<'a, Op, Metadata>> {
         // Issue a new channel and return its identifier paired with a stream of
