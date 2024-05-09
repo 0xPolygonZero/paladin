@@ -1,0 +1,5 @@
+env RUSTFLAGS='-C target-cpu=native' cargo build --release{
+  "image": "mcr.microsoft.com/devcontainers/universal:2",
+  "features": {
+  }
+}
