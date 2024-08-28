@@ -15,7 +15,6 @@ use futures::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::{select, sync::Notify};
-use uuid::Uuid;
 
 use super::IndexedStream;
 use crate::{
@@ -83,7 +82,7 @@ struct Dispatcher<'a, M: Monoid> {
     m: &'a M,
     assembler: Arc<ContiguousQueue<TaskOutput<M, Metadata>>>,
     tx: Sender<Task<'a, M, Metadata>>,
-    channel_identifier: Uuid,
+    channel_identifier: String,
 }
 
 impl<'a, Op: Monoid + 'static> Dispatcher<'a, Op> {
@@ -104,7 +103,7 @@ impl<'a, Op: Monoid + 'static> Dispatcher<'a, Op> {
     async fn try_dispatch(&self, result: TaskOutput<Op, Metadata>) -> Result<()> {
         if let Some((lhs, rhs)) = self.assembler.acquire_contiguous_pair_or_queue(result) {
             let task = Task {
-                routing_key: self.channel_identifier,
+                routing_key: self.channel_identifier.clone(),
                 metadata: Metadata {
                     range: *lhs.metadata.range.start()..=*rhs.metadata.range.end(),
                 },

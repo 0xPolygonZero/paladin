@@ -9,7 +9,6 @@ use std::fmt::Debug;
 use anyhow::Result;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::{
     __private::OPERATIONS,
@@ -32,7 +31,7 @@ pub struct Task<'a, Op: Operation, Metadata: Serializable> {
     /// The routing key used to identify the
     /// [`Channel`](crate::channel::Channel) to which execution results should
     /// be sent.
-    pub routing_key: Uuid,
+    pub routing_key: String,
     /// Metadata associated with the [`Task`].
     pub metadata: Metadata,
     /// The [`Operation`] to be executed.
@@ -60,12 +59,12 @@ pub type TaskResult<Op, Metadata> = Result<TaskOutput<Op, Metadata>>;
 ///
 /// This type is used to facilitate opaque execution of [`Operation`]s, such
 /// that executors can execute arbitrary [`Operation`]s.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AnyTask {
     /// The routing key used to identify the
     /// [`Channel`](crate::channel::Channel) to which execution results should
     /// be sent.
-    pub routing_key: Uuid,
+    pub routing_key: String,
     /// Serialized metadata associated with the [`Task`].
     pub metadata: Bytes,
     /// The serialized [`Operation`] to be executed.
@@ -119,7 +118,7 @@ pub enum AnyTaskResult {
 impl<'a, Op: Operation, Metadata: Serializable> Task<'a, Op, Metadata> {
     /// Convert a [`Task`] into an opaque [`AnyTask`].
     pub fn as_any_task(&self, serializer: Serializer) -> Result<AnyTask> {
-        let routing_key = self.routing_key;
+        let routing_key = self.routing_key.clone();
         let metadata = serializer.to_bytes(&self.metadata)?;
         let input = serializer.to_bytes(&self.input)?;
         let op = serializer.to_bytes(self.op)?;

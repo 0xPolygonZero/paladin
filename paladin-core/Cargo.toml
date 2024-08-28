@@ -17,8 +17,9 @@ rustdoc-args = ["--cfg", "docsrs"]
 name = "paladin"
 
 [dependencies]
-anyhow = { version = "1.0.75", features = ["backtrace"] }
 dotenvy = "0.15.7"
+anyhow = { version = "1.0.75", features = ["backtrace"] }
+rand = "0.8.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 lapin = "2.3.1"

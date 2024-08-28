@@ -59,7 +59,6 @@ use futures::{stream::BoxStream, Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::{select, task::JoinHandle, try_join};
 use tracing::{debug_span, error, instrument, trace, warn, Instrument};
-use uuid::Uuid;
 
 use self::dynamic_channel::{DynamicChannel, DynamicChannelFactory};
 use crate::{
@@ -77,7 +76,7 @@ use crate::{
 type Receiver<'a, Item> = Box<dyn Stream<Item = (Item, Box<dyn Acker>)> + Send + Unpin + 'a>;
 type Sender<'a, Item> = Box<dyn Publisher<Item> + Send + Unpin + Sync + 'a>;
 type CoordinatedTaskChannel<'a, Op, Metadata> = (
-    Uuid,
+    String,
     Sender<'a, Task<'a, Op, Metadata>>,
     LeaseGuard<DynamicChannel, Receiver<'a, TaskResult<Op, Metadata>>>,
 );
@@ -113,6 +112,8 @@ type CoordinatedTaskChannel<'a, Op, Metadata> = (
 ///
 /// See the [runtime module documentation](crate::runtime) for more information
 /// on runtime semantics.
+///
+
 pub struct Runtime {
     channel_factory: DynamicChannelFactory,
     task_channel: DynamicChannel,
@@ -120,15 +121,22 @@ pub struct Runtime {
     worker_emulator: Option<Vec<JoinHandle<Result<()>>>>,
     _marker: Marker,
 }
-const TASK_BUS_ROUTING_KEY: Uuid = Uuid::nil();
-const IPC_ROUTING_KEY: Uuid = Uuid::max();
+
+// TODO - This is a hack for now. We need to figure out a better way to handle
+const IPC_ROUTING_KEY: &str = "ffffffff-ffff-ffff-ffff-ffffffffffff";
 
 impl Runtime {
     /// Initializes the [`Runtime`] with the provided [`Config`].
     pub async fn from_config(config: &Config, marker: Marker) -> Result<Self> {
         let channel_factory = DynamicChannelFactory::from_config(config).await?;
         let task_channel = channel_factory
-            .get(TASK_BUS_ROUTING_KEY, ChannelType::ExactlyOnce)
+            .get(
+                config
+                    .task_bus_routing_key
+                    .clone()
+                    .unwrap_or("".to_string()),
+                ChannelType::ExactlyOnce,
+            )
             .await?;
         let serializer = Serializer::from(config);
 
@@ -269,7 +277,7 @@ impl Runtime {
     /// # impl Operation for StringLength {
     /// #    type Input = String;
     /// #    type Output = usize;
-    /// #    
+    /// #
     /// #    fn execute(&self, input: Self::Input) -> Result<Self::Output> {
     /// #       Ok(input.len())
     /// #    }
@@ -383,13 +391,13 @@ pub struct WorkerRuntime {
 
 #[derive(Debug)]
 pub struct ExecutionOk {
-    pub routing_key: Uuid,
+    pub routing_key: String,
     pub output: AnyTaskOutput,
 }
 
 #[derive(Debug)]
 pub struct ExecutionErr<E> {
-    routing_key: Uuid,
+    routing_key: String,
     err: E,
     strategy: FatalStrategy,
 }
@@ -397,7 +405,7 @@ pub struct ExecutionErr<E> {
 /// Inter-process messages between workers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum WorkerIpc {
-    ExecutionError { routing_key: Uuid },
+    ExecutionError { routing_key: String },
 }
 
 impl WorkerRuntime {
@@ -405,7 +413,13 @@ impl WorkerRuntime {
     pub async fn from_config(config: &Config, marker: Marker) -> Result<Self> {
         let channel_factory = DynamicChannelFactory::from_config(config).await?;
         let task_channel = channel_factory
-            .get(TASK_BUS_ROUTING_KEY, ChannelType::ExactlyOnce)
+            .get(
+                config
+                    .task_bus_routing_key
+                    .clone()
+                    .unwrap_or("".to_string()),
+                ChannelType::ExactlyOnce,
+            )
             .await?;
 
         Ok(Self {
@@ -420,7 +434,7 @@ impl WorkerRuntime {
     /// Typically used by a worker node for send back the results of a [`Task`]
     /// execution.
     #[instrument(skip(self), level = "trace")]
-    pub async fn get_result_sender(&self, identifier: Uuid) -> Result<Sender<AnyTaskResult>> {
+    pub async fn get_result_sender(&self, identifier: String) -> Result<Sender<AnyTaskResult>> {
         self.channel_factory
             .get(identifier, ChannelType::ExactlyOnce)
             .await?
@@ -435,7 +449,7 @@ impl WorkerRuntime {
     #[instrument(skip(self), level = "trace")]
     pub async fn get_ipc_sender(&self) -> Result<Sender<WorkerIpc>> {
         self.channel_factory
-            .get(IPC_ROUTING_KEY, ChannelType::Broadcast)
+            .get(IPC_ROUTING_KEY.to_string(), ChannelType::Broadcast)
             .await?
             .sender()
             .await
@@ -449,7 +463,7 @@ impl WorkerRuntime {
     pub async fn get_ipc_receiver(&self) -> Result<BoxStream<'static, WorkerIpc>> {
         let s = self
             .channel_factory
-            .get(IPC_ROUTING_KEY, ChannelType::Broadcast)
+            .get(IPC_ROUTING_KEY.to_string(), ChannelType::Broadcast)
             .await?
             .receiver::<WorkerIpc>()
             .await?;
@@ -486,7 +500,7 @@ impl WorkerRuntime {
     /// # impl Operation for StringLength {
     /// #    type Input = String;
     /// #    type Output = usize;
-    /// #    
+    /// #
     /// #    fn execute(&self, input: Self::Input) -> Result<Self::Output> {
     /// #        Ok(input.len())
     /// #    }
@@ -505,10 +519,10 @@ impl WorkerRuntime {
     /// async fn main() -> anyhow::Result<()> {
     ///     let args = Cli::parse();
     ///     let runtime = WorkerRuntime::from_config(&args.options, register()).await?;
-    ///     
+    ///
     ///     let mut task_stream = runtime.get_task_receiver().await?;
     ///     while let Some((task, delivery)) = task_stream.next().await {
-    ///         // ... handle task   
+    ///         // ... handle task
     ///     }
     /// #  Ok(())
     /// }
@@ -538,8 +552,10 @@ impl WorkerRuntime {
             FatalStrategy::Ignore => Ok(()),
             FatalStrategy::Terminate => {
                 // Notify other workers of the error.
-                let (ipc, sender) =
-                    try_join!(self.get_ipc_sender(), self.get_result_sender(routing_key))?;
+                let (ipc, sender) = try_join!(
+                    self.get_ipc_sender(),
+                    self.get_result_sender(routing_key.clone())
+                )?;
 
                 let ipc_msg = WorkerIpc::ExecutionError { routing_key };
                 let sender_msg = AnyTaskResult::Err(err.to_string());
@@ -599,7 +615,7 @@ impl WorkerRuntime {
     /// # impl Operation for StringLength {
     /// #    type Input = String;
     /// #    type Output = usize;
-    /// #    
+    /// #
     /// #    fn execute(&self, input: Self::Input) -> Result<Self::Output> {
     /// #       Ok(input.len())
     /// #    }
@@ -628,9 +644,8 @@ impl WorkerRuntime {
         let mut task_stream = self.get_task_receiver().await?;
 
         const TERMINATION_CLEAR_INTERVAL: Duration = Duration::from_secs(60);
-        // Keep track of terminated jobs to avoid processing new tasks associated to
-        // them.
-        let terminated_jobs: Arc<DashMap<Uuid, Instant>> = Default::default();
+        // Keep track of terminated jobs to avoid processing new tasks associated to them.
+        let terminated_jobs: Arc<DashMap<String, Instant>> = Default::default();
 
         // Spawn a task that will periodically clear the terminated jobs map.
         let reaper = tokio::spawn({
@@ -645,10 +660,9 @@ impl WorkerRuntime {
 
         // Create a watch channel for signaling IPC changes while processing a task.
         let (ipc_sig_term_tx, ipc_sig_term_rx) =
-            tokio::sync::watch::channel::<Uuid>(Uuid::new_v4());
+            tokio::sync::watch::channel::<String>("".to_string());
 
-        // Spawn a task that will listen for IPC termination signals and mark
-        // jobs as terminated.
+        // Spawn a task that will listen for IPC termination signals and mark jobs as terminated.
         let mut ipc_receiver = self.get_ipc_receiver().await?;
         let remote_ipc_sig_term_handler = tokio::spawn({
             let terminated_jobs = terminated_jobs.clone();
@@ -658,10 +672,10 @@ impl WorkerRuntime {
                     match ipc {
                         WorkerIpc::ExecutionError { routing_key } => {
                             // Mark the job as terminated if it hasn't been already.
-                            if mark_terminated(&terminated_jobs, routing_key) {
-                                warn!(routing_key = %routing_key.simple(), "received IPC termination signal");
+                            if mark_terminated(&terminated_jobs, routing_key.clone()) {
+                                warn!(routing_key = %routing_key, "received IPC termination signal");
                                 // Notify any currently executing tasks of the error.
-                                ipc_sig_term_tx.send_replace(routing_key);
+                                ipc_sig_term_tx.send_replace(routing_key.clone());
                             }
                         }
                     }
@@ -674,8 +688,11 @@ impl WorkerRuntime {
         /// Returns `true` if the job was marked as terminated, `false`
         /// otherwise (i.e., it was already marked terminated).
         #[inline]
-        fn mark_terminated(terminated_jobs: &DashMap<Uuid, Instant>, routing_key: Uuid) -> bool {
-            if let Entry::Vacant(entry) = terminated_jobs.entry(routing_key) {
+        fn mark_terminated(
+            terminated_jobs: &DashMap<String, Instant>,
+            routing_key: String,
+        ) -> bool {
+            if let Entry::Vacant(entry) = terminated_jobs.entry(routing_key.clone()) {
                 entry.insert(Instant::now());
                 return true;
             }
@@ -684,33 +701,34 @@ impl WorkerRuntime {
 
         while let Some((payload, acker)) = task_stream.next().await {
             // Skip tasks associated with terminated jobs.
-            if terminated_jobs.contains_key(&payload.routing_key) {
-                trace!(routing_key = %payload.routing_key.simple(), "skipping terminated job");
+            if terminated_jobs.contains_key(&payload.clone().routing_key) {
+                trace!(routing_key = %payload.clone().routing_key, "skipping terminated job");
                 acker.nack().await?;
 
                 continue;
             }
 
-            let routing_key = payload.routing_key;
+            let routing_key = payload.clone().routing_key;
+            let routing_key_clone = routing_key.clone(); // Clone here
 
-            let span = debug_span!("remote_execute", routing_key = %routing_key.simple());
+            let span = debug_span!("remote_execute", routing_key = %routing_key_clone);
             let execution_task = payload.remote_execute().instrument(span);
 
             // Create a future that will wait for an IPC termination signal.
             let ipc_sig_term = {
                 let mut ipc_sig_term_rx = ipc_sig_term_rx.clone();
+                let routing_key_clone = routing_key_clone.clone(); // Clone here
                 async move {
                     loop {
                         ipc_sig_term_rx.changed().await.expect("IPC channel closed");
-                        if *ipc_sig_term_rx.borrow() == routing_key {
+                        if *ipc_sig_term_rx.borrow() == routing_key_clone {
                             return true;
                         }
                     }
                 }
             };
 
-            // Wait for either the task to complete or an IPC termination
-            // signal.
+            // Wait for either the task to complete or an IPC termination signal.
             select! {
                 execution = execution_task => {
                     match execution {
@@ -724,8 +742,8 @@ impl WorkerRuntime {
                             )?;
                         }
                         Err(err) => {
-                            error!(routing_key = %routing_key.simple(), "execution error: {err:?}");
-                            mark_terminated(&terminated_jobs, routing_key);
+                            error!(routing_key = %routing_key, "execution error: {err:?}");
+                            mark_terminated(&terminated_jobs, routing_key.clone());
 
                             try_join!(
                                 acker.nack(),
@@ -739,7 +757,7 @@ impl WorkerRuntime {
                     }
                 }
                 _ = ipc_sig_term => {
-                    warn!(routing_key = %routing_key.simple(), "task cancelled via IPC sigterm");
+                    warn!(routing_key = %routing_key, "task cancelled via IPC sigterm");
                     _ = acker.nack().await;
                 }
             }

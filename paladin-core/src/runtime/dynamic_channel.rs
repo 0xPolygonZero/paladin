@@ -13,7 +13,6 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
-use uuid::Uuid;
 
 use crate::{
     acker::Acker,
@@ -98,7 +97,7 @@ pub enum DynamicChannelFactory {
 impl ChannelFactory for DynamicChannelFactory {
     type Channel = DynamicChannel;
 
-    async fn get(&self, identifier: Uuid, channel_type: ChannelType) -> Result<DynamicChannel> {
+    async fn get(&self, identifier: String, channel_type: ChannelType) -> Result<DynamicChannel> {
         match self {
             Self::Amqp(factory) => Ok(DynamicChannel::Amqp(
                 factory.get(identifier, channel_type).await?,
@@ -109,7 +108,7 @@ impl ChannelFactory for DynamicChannelFactory {
         }
     }
 
-    async fn issue(&self, channel_type: ChannelType) -> Result<(Uuid, DynamicChannel)> {
+    async fn issue(&self, channel_type: ChannelType) -> Result<(String, DynamicChannel)> {
         match self {
             Self::Amqp(factory) => {
                 let (identifier, channel) = factory.issue(channel_type).await?;

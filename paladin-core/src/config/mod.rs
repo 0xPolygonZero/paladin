@@ -40,6 +40,8 @@ pub struct Config {
     /// Provides the URI for the AMQP broker, if the AMQP runtime is selected.
     #[arg(long, help_heading = HELP_HEADING, env = "AMQP_URI", required_if_eq("runtime", "amqp"))]
     pub amqp_uri: Option<String>,
+
+    pub task_bus_routing_key: Option<String>,
 }
 
 /// Enumerates the available serialization formats.
