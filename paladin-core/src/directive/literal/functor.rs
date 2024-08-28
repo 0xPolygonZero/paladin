@@ -12,6 +12,7 @@ impl<'a, A: Send, B: Send> Functor<'a, B> for Literal<A> {
         op: &'a Op,
         runtime: &Runtime,
     ) -> Result<Self::Target> {
+        println!("f_map2");
         let (channel_identifier, sender, mut receiver) =
             runtime.lease_coordinated_task_channel().await?;
 

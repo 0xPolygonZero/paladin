@@ -29,8 +29,11 @@ impl<'a, A: Send + Sync + 'a, B: Send + 'a> Functor<'a, B> for IndexedStream<'a,
     where
         Op: Operation<Input = A, Output = B>,
     {
+        println!("---------- fmap");
+        println!("runtime:");
         let (channel_identifier, sender, receiver) =
             runtime.lease_coordinated_task_channel().await?;
+        println!("channel_identifier: {:?}", channel_identifier);
 
         // Place the sending task into a stream so that it can be combined with the
         // output stream with `select`. This will allow us to forward any errors that
@@ -38,15 +41,19 @@ impl<'a, A: Send + Sync + 'a, B: Send + 'a> Functor<'a, B> for IndexedStream<'a,
         // while sending tasks means that the entire operation should fail, as
         // the output stream will be incomplete.
         let sender_stream = futures::stream::once(async move {
+            println!("f_map {:?}", channel_identifier);
             let task_stream = self.map_ok(|(idx, input)| Task {
-                routing_key: channel_identifier,
+                routing_key: channel_identifier.clone(),
                 metadata: Metadata { idx },
                 op,
                 input,
             });
 
+            println!("f_map abc");
             sender.publish_all(task_stream, MAX_CONCURRENCY).await?;
+            println!("f_map bcd");
             sender.close().await?;
+            println!("f_map cde");
             Ok::<(), anyhow::Error>(())
         })
         .filter_map(|result| async move {
@@ -54,6 +61,7 @@ impl<'a, A: Send + Sync + 'a, B: Send + 'a> Functor<'a, B> for IndexedStream<'a,
             result.err().map(Err)
         });
 
+        println!("f_map def");
         let result_stream = receiver.then(move |(result, acker)| {
             Box::pin(async move {
                 acker.ack().await?;
@@ -61,6 +69,7 @@ impl<'a, A: Send + Sync + 'a, B: Send + 'a> Functor<'a, B> for IndexedStream<'a,
             })
         });
 
+        println!("f_map efg");
         Ok(IndexedStream::new(futures::stream::select(
             sender_stream,
             result_stream,

@@ -1269,6 +1269,7 @@ dependencies = [
  "paladin-opkind-derive",
  "pin-project",
  "postcard",
+ "rand",
  "serde",
  "thiserror",
  "tokio",

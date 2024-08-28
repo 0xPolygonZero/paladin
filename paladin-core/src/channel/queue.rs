@@ -88,7 +88,6 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use uuid::Uuid;
 
 use crate::{
     channel::{Channel, ChannelFactory, ChannelType},
@@ -134,7 +133,7 @@ impl<Conn> QueueChannelFactory<Conn> {
 #[derive(Clone)]
 pub struct QueueChannel<Conn> {
     connection: Conn,
-    identifier: Uuid,
+    identifier: String,
     channel_type: ChannelType,
 }
 
@@ -158,12 +157,7 @@ impl<
     async fn sender<'a, T: Serializable + 'a>(&self) -> Result<Self::Sender<'a, T>> {
         let queue = self
             .connection
-            .declare_queue(
-                self.identifier
-                    .as_simple()
-                    .encode_lower(&mut Uuid::encode_buffer()),
-                self.channel_type.into(),
-            )
+            .declare_queue(self.identifier.as_str(), self.channel_type.into())
             .await?;
 
         Ok(queue.publisher())
@@ -173,14 +167,9 @@ impl<
     async fn receiver<'a, T: Serializable + 'a>(&self) -> Result<Self::Receiver<'a, T>> {
         let queue = self
             .connection
-            .declare_queue(
-                self.identifier
-                    .as_simple()
-                    .encode_lower(&mut Uuid::encode_buffer()),
-                self.channel_type.into(),
-            )
+            .declare_queue(self.identifier.as_str(), self.channel_type.into())
             .await?;
-        let consumer = queue.declare_consumer(&Uuid::new_v4().to_string()).await?;
+        let consumer = queue.declare_consumer("").await?;
 
         Ok(consumer)
     }
@@ -188,11 +177,10 @@ impl<
     /// Delete the underlying queue.
     fn release(&self) {
         let conn = self.connection.clone();
-        let identifier = self.identifier;
+        let identifier = self.identifier.clone();
 
         tokio::spawn(async move {
-            let buffer = &mut Uuid::encode_buffer();
-            let identifier = identifier.as_simple().encode_lower(buffer);
+            let identifier = identifier.as_str();
             _ = conn.delete_queue(identifier).await;
         });
     }
@@ -206,7 +194,7 @@ where
     type Channel = QueueChannel<Conn>;
 
     /// Get an existing channel.
-    async fn get(&self, identifier: Uuid, channel_type: ChannelType) -> Result<Self::Channel> {
+    async fn get(&self, identifier: String, channel_type: ChannelType) -> Result<Self::Channel> {
         Ok(QueueChannel {
             connection: self.connection.clone(),
             identifier,
@@ -215,10 +203,16 @@ where
     }
 
     /// Issue a new channel, generating a new UUID as the identifier.
-    async fn issue(&self, channel_type: ChannelType) -> Result<(Uuid, Self::Channel)> {
-        let identifier = Uuid::new_v4();
+    async fn issue(&self, channel_type: ChannelType) -> Result<(String, Self::Channel)> {
+        use rand::{distributions::Alphanumeric, Rng}; // 0.8
+
+        let identifier: String = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(7)
+            .map(char::from)
+            .collect();
         Ok((
-            identifier,
+            identifier.clone(),
             QueueChannel {
                 connection: self.connection.clone(),
                 identifier,
