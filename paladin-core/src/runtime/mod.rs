@@ -112,7 +112,6 @@ type CoordinatedTaskChannel<'a, Op, Metadata> = (
 ///
 /// See the [runtime module documentation](crate::runtime) for more information
 /// on runtime semantics.
-///
 
 pub struct Runtime {
     channel_factory: DynamicChannelFactory,
@@ -644,7 +643,8 @@ impl WorkerRuntime {
         let mut task_stream = self.get_task_receiver().await?;
 
         const TERMINATION_CLEAR_INTERVAL: Duration = Duration::from_secs(60);
-        // Keep track of terminated jobs to avoid processing new tasks associated to them.
+        // Keep track of terminated jobs to avoid processing new tasks associated to
+        // them.
         let terminated_jobs: Arc<DashMap<String, Instant>> = Default::default();
 
         // Spawn a task that will periodically clear the terminated jobs map.
@@ -662,7 +662,8 @@ impl WorkerRuntime {
         let (ipc_sig_term_tx, ipc_sig_term_rx) =
             tokio::sync::watch::channel::<String>("".to_string());
 
-        // Spawn a task that will listen for IPC termination signals and mark jobs as terminated.
+        // Spawn a task that will listen for IPC termination signals and mark jobs as
+        // terminated.
         let mut ipc_receiver = self.get_ipc_receiver().await?;
         let remote_ipc_sig_term_handler = tokio::spawn({
             let terminated_jobs = terminated_jobs.clone();
