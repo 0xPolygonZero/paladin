@@ -7,8 +7,8 @@
 //!
 //! # Features:
 //! - **Serializable Trait**: A shorthand trait that encapsulates common
-//!   serialization and deserialization behaviors.
-//!   It's designed to be used in asynchronous or threaded contexts.
+//!   serialization and deserialization behaviors. It's designed to be used in
+//!   asynchronous or threaded contexts.
 //! - **Serializer Enum**: Provides a generic way to serialize and deserialize
 //!   binary data. It supports multiple serialization formats and can be easily
 //!   extended.

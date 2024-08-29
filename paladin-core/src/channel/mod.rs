@@ -5,11 +5,10 @@
 //! - It supports a notion of message acknowledgement.
 //! - It supports a notion of resource release.
 //! - Rather than returning a tuple of `(sender, receiver)`, it breaks each into
-//!   separate methods.
-//!   This is because generally senders and receivers are usually instantiated in
-//!   separate process, as the channel is meant to facilitate inter process
-//!   communication. This avoids instantiating unnecessary resources when only one
-//!   is needed.
+//!   separate methods. This is because generally senders and receivers are
+//!   usually instantiated in separate process, as the channel is meant to
+//!   facilitate inter process communication. This avoids instantiating
+//!   unnecessary resources when only one is needed.
 
 use std::{
     pin::Pin,
