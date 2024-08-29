@@ -18,6 +18,7 @@
 //! provided configuration.
 
 use clap::{Args, ValueEnum};
+use uuid::Uuid;
 
 const HELP_HEADING: &str = "Paladin options";
 
@@ -40,6 +41,10 @@ pub struct Config {
     /// Provides the URI for the AMQP broker, if the AMQP runtime is selected.
     #[arg(long, help_heading = HELP_HEADING, env = "AMQP_URI", required_if_eq("runtime", "amqp"))]
     pub amqp_uri: Option<String>,
+
+    /// Provides the routing key workers should use to listen for tasks on the
+    #[arg(long, help_heading = HELP_HEADING)]
+    pub task_bus_routing_key: Option<Uuid>,
 }
 
 /// Enumerates the available serialization formats.

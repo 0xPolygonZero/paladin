@@ -120,7 +120,6 @@ pub struct Runtime {
     worker_emulator: Option<Vec<JoinHandle<Result<()>>>>,
     _marker: Marker,
 }
-const TASK_BUS_ROUTING_KEY: Uuid = Uuid::nil();
 const IPC_ROUTING_KEY: Uuid = Uuid::max();
 
 impl Runtime {
@@ -128,7 +127,10 @@ impl Runtime {
     pub async fn from_config(config: &Config, marker: Marker) -> Result<Self> {
         let channel_factory = DynamicChannelFactory::from_config(config).await?;
         let task_channel = channel_factory
-            .get(TASK_BUS_ROUTING_KEY, ChannelType::ExactlyOnce)
+            .get(
+                config.task_bus_routing_key.unwrap_or(Uuid::nil()),
+                ChannelType::ExactlyOnce,
+            )
             .await?;
         let serializer = Serializer::from(config);
 
@@ -269,7 +271,7 @@ impl Runtime {
     /// # impl Operation for StringLength {
     /// #    type Input = String;
     /// #    type Output = usize;
-    /// #    
+    /// #
     /// #    fn execute(&self, input: Self::Input) -> Result<Self::Output> {
     /// #       Ok(input.len())
     /// #    }
@@ -405,7 +407,10 @@ impl WorkerRuntime {
     pub async fn from_config(config: &Config, marker: Marker) -> Result<Self> {
         let channel_factory = DynamicChannelFactory::from_config(config).await?;
         let task_channel = channel_factory
-            .get(TASK_BUS_ROUTING_KEY, ChannelType::ExactlyOnce)
+            .get(
+                config.task_bus_routing_key.unwrap_or(Uuid::nil()),
+                ChannelType::ExactlyOnce,
+            )
             .await?;
 
         Ok(Self {
@@ -486,7 +491,7 @@ impl WorkerRuntime {
     /// # impl Operation for StringLength {
     /// #    type Input = String;
     /// #    type Output = usize;
-    /// #    
+    /// #
     /// #    fn execute(&self, input: Self::Input) -> Result<Self::Output> {
     /// #        Ok(input.len())
     /// #    }
@@ -505,10 +510,10 @@ impl WorkerRuntime {
     /// async fn main() -> anyhow::Result<()> {
     ///     let args = Cli::parse();
     ///     let runtime = WorkerRuntime::from_config(&args.options, register()).await?;
-    ///     
+    ///
     ///     let mut task_stream = runtime.get_task_receiver().await?;
     ///     while let Some((task, delivery)) = task_stream.next().await {
-    ///         // ... handle task   
+    ///         // ... handle task
     ///     }
     /// #  Ok(())
     /// }
@@ -599,7 +604,7 @@ impl WorkerRuntime {
     /// # impl Operation for StringLength {
     /// #    type Input = String;
     /// #    type Output = usize;
-    /// #    
+    /// #
     /// #    fn execute(&self, input: Self::Input) -> Result<Self::Output> {
     /// #       Ok(input.len())
     /// #    }
