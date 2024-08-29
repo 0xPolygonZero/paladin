@@ -56,6 +56,7 @@ use std::{
 use anyhow::Result;
 use dashmap::{mapref::entry::Entry, DashMap};
 use futures::{stream::BoxStream, Stream, StreamExt};
+use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
 use tokio::{select, task::JoinHandle, try_join};
 use tracing::{debug_span, error, instrument, trace, warn, Instrument};
@@ -130,10 +131,7 @@ impl Runtime {
         let channel_factory = DynamicChannelFactory::from_config(config).await?;
         let task_channel = channel_factory
             .get(
-                config
-                    .task_bus_routing_key
-                    .clone()
-                    .unwrap_or("".to_string()),
+                config.task_bus_routing_key.clone().unwrap_or_default(),
                 ChannelType::ExactlyOnce,
             )
             .await?;
@@ -413,10 +411,7 @@ impl WorkerRuntime {
         let channel_factory = DynamicChannelFactory::from_config(config).await?;
         let task_channel = channel_factory
             .get(
-                config
-                    .task_bus_routing_key
-                    .clone()
-                    .unwrap_or("".to_string()),
+                config.task_bus_routing_key.clone().unwrap_or_default(),
                 ChannelType::ExactlyOnce,
             )
             .await?;
@@ -658,9 +653,14 @@ impl WorkerRuntime {
             }
         });
 
+        let identifier: String = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(10)
+            .map(char::from)
+            .collect();
+
         // Create a watch channel for signaling IPC changes while processing a task.
-        let (ipc_sig_term_tx, ipc_sig_term_rx) =
-            tokio::sync::watch::channel::<String>("".to_string());
+        let (ipc_sig_term_tx, ipc_sig_term_rx) = tokio::sync::watch::channel::<String>(identifier);
 
         // Spawn a task that will listen for IPC termination signals and mark jobs as
         // terminated.

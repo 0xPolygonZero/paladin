@@ -41,6 +41,8 @@ pub struct Config {
     #[arg(long, help_heading = HELP_HEADING, env = "AMQP_URI", required_if_eq("runtime", "amqp"))]
     pub amqp_uri: Option<String>,
 
+    /// Provides the routing key for workers to listen on, if the AMQP runtime
+    #[arg(long, help_heading = HELP_HEADING)]
     pub task_bus_routing_key: Option<String>,
 }
 

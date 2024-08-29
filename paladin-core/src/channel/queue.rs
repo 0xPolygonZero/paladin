@@ -84,9 +84,11 @@
 //!
 //!     Ok(())
 //! }
+//! ```
 
 use anyhow::Result;
 use async_trait::async_trait;
+use rand::{distributions::Alphanumeric, Rng};
 
 use crate::{
     channel::{Channel, ChannelFactory, ChannelType},
@@ -96,6 +98,7 @@ use crate::{
     serializer::Serializable,
 };
 
+/// Conversion from [`ChannelType`] to [`QueueOptions`].
 impl From<ChannelType> for QueueOptions {
     fn from(channel_type: ChannelType) -> Self {
         match channel_type {
@@ -156,7 +159,7 @@ impl<
     async fn sender<'a, T: Serializable + 'a>(&self) -> Result<Self::Sender<'a, T>> {
         let queue = self
             .connection
-            .declare_queue(self.identifier.as_str(), self.channel_type.into())
+            .declare_queue(&self.identifier, self.channel_type.into())
             .await?;
 
         Ok(queue.publisher())
@@ -164,18 +167,17 @@ impl<
 
     /// Get a receiver for the underlying queue.
     async fn receiver<'a, T: Serializable + 'a>(&self) -> Result<Self::Receiver<'a, T>> {
-        // TODO - this is a bit of a hack, but it works for now
-        use rand::{distributions::Alphanumeric, Rng}; // 0.8
-        let iden: String = rand::thread_rng()
+        let identifier: String = rand::thread_rng()
             .sample_iter(&Alphanumeric)
-            .take(7)
+            .take(10)
             .map(char::from)
             .collect();
+
         let queue = self
             .connection
-            .declare_queue(self.identifier.as_str(), self.channel_type.into())
+            .declare_queue(&self.identifier, self.channel_type.into())
             .await?;
-        let consumer = queue.declare_consumer(iden.as_str()).await?;
+        let consumer = queue.declare_consumer(&identifier).await?;
 
         Ok(consumer)
     }
@@ -186,8 +188,7 @@ impl<
         let identifier = self.identifier.clone();
 
         tokio::spawn(async move {
-            let identifier = identifier.as_str();
-            _ = conn.delete_queue(identifier).await;
+            _ = conn.delete_queue(&identifier).await;
         });
     }
 }
@@ -208,14 +209,11 @@ where
         })
     }
 
-    /// Issue a new channel, generating a new string as the identifier.
+    /// Issue a new channel, generating a unique identifier.
     async fn issue(&self, channel_type: ChannelType) -> Result<(String, Self::Channel)> {
-        // TODO - Hacky way to generate a unique identifier
-        use rand::{distributions::Alphanumeric, Rng}; // 0.8
-
         let identifier: String = rand::thread_rng()
             .sample_iter(&Alphanumeric)
-            .take(7)
+            .take(10)
             .map(char::from)
             .collect();
 
