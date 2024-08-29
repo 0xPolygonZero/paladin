@@ -15,7 +15,6 @@
 //!     queue::{Connection, Publisher, amqp::{AMQPConnection, AMQPConnectionOptions}},
 //!     channel::{Channel, ChannelType, ChannelFactory, queue::QueueChannelFactory},
 //! };
-//! use uuid::Uuid;
 //! use serde::{Serialize, Deserialize};
 //! use anyhow::Result;
 //!
@@ -209,8 +208,9 @@ where
         })
     }
 
-    /// Issue a new channel, generating a new UUID as the identifier.
+    /// Issue a new channel, generating a new string as the identifier.
     async fn issue(&self, channel_type: ChannelType) -> Result<(String, Self::Channel)> {
+        // TODO - Hacky way to generate a unique identifier
         use rand::{distributions::Alphanumeric, Rng}; // 0.8
 
         let identifier: String = rand::thread_rng()
