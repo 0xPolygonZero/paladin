@@ -88,10 +88,10 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use rand::{distributions::Alphanumeric, Rng};
 
 use crate::{
     channel::{Channel, ChannelFactory, ChannelType},
+    common::get_random_routing_key,
     queue::{
         Connection, DeliveryMode, QueueDurability, QueueHandle, QueueOptions, SyndicationMode,
     },
@@ -167,11 +167,7 @@ impl<
 
     /// Get a receiver for the underlying queue.
     async fn receiver<'a, T: Serializable + 'a>(&self) -> Result<Self::Receiver<'a, T>> {
-        let identifier: String = rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(10)
-            .map(char::from)
-            .collect();
+        let identifier: String = get_random_routing_key();
 
         let queue = self
             .connection
@@ -211,11 +207,7 @@ where
 
     /// Issue a new channel, generating a unique identifier.
     async fn issue(&self, channel_type: ChannelType) -> Result<(String, Self::Channel)> {
-        let identifier: String = rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(10)
-            .map(char::from)
-            .collect();
+        let identifier: String = get_random_routing_key();
 
         Ok((
             identifier.clone(),

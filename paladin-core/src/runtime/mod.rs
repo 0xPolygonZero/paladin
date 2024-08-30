@@ -56,7 +56,6 @@ use std::{
 use anyhow::Result;
 use dashmap::{mapref::entry::Entry, DashMap};
 use futures::{stream::BoxStream, Stream, StreamExt};
-use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
 use tokio::{select, task::JoinHandle, try_join};
 use tracing::{debug_span, error, instrument, trace, warn, Instrument};
@@ -67,6 +66,7 @@ use crate::{
     channel::{
         coordinated_channel::coordinated_channel, Channel, ChannelFactory, ChannelType, LeaseGuard,
     },
+    common::get_random_routing_key,
     config::Config,
     operation::{marker::Marker, FatalStrategy, Operation},
     queue::{Publisher, PublisherExt},
@@ -122,8 +122,8 @@ pub struct Runtime {
     _marker: Marker,
 }
 
-// TODO - This is a hack for now. We need to figure out a better way to handle
 const IPC_ROUTING_KEY: &str = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+const DEFAULT_ROUTING_KEY: &str = "task";
 
 impl Runtime {
     /// Initializes the [`Runtime`] with the provided [`Config`].
@@ -131,7 +131,10 @@ impl Runtime {
         let channel_factory = DynamicChannelFactory::from_config(config).await?;
         let task_channel = channel_factory
             .get(
-                config.task_bus_routing_key.clone().unwrap_or_default(),
+                config
+                    .task_bus_routing_key
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_ROUTING_KEY.to_string()),
                 ChannelType::ExactlyOnce,
             )
             .await?;
@@ -411,7 +414,10 @@ impl WorkerRuntime {
         let channel_factory = DynamicChannelFactory::from_config(config).await?;
         let task_channel = channel_factory
             .get(
-                config.task_bus_routing_key.clone().unwrap_or_default(),
+                config
+                    .task_bus_routing_key
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_ROUTING_KEY.to_string()),
                 ChannelType::ExactlyOnce,
             )
             .await?;
@@ -653,11 +659,7 @@ impl WorkerRuntime {
             }
         });
 
-        let identifier: String = rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(10)
-            .map(char::from)
-            .collect();
+        let identifier: String = get_random_routing_key();
 
         // Create a watch channel for signaling IPC changes while processing a task.
         let (ipc_sig_term_tx, ipc_sig_term_rx) = tokio::sync::watch::channel::<String>(identifier);
