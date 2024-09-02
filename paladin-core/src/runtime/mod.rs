@@ -123,7 +123,7 @@ pub struct Runtime {
 }
 
 const IPC_ROUTING_KEY: &str = "ffffffff-ffff-ffff-ffff-ffffffffffff";
-const DEFAULT_ROUTING_KEY: &str = "task";
+pub const DEFAULT_ROUTING_KEY: &str = "default";
 
 impl Runtime {
     /// Initializes the [`Runtime`] with the provided [`Config`].
