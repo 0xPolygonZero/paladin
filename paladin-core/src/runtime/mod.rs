@@ -122,7 +122,7 @@ pub struct Runtime {
     _marker: Marker,
 }
 
-const IPC_ROUTING_KEY: &str = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+const IPC_ROUTING_KEY: &str = "ipc-routing-key";
 pub const DEFAULT_ROUTING_KEY: &str = "default";
 
 impl Runtime {
@@ -712,7 +712,7 @@ impl WorkerRuntime {
             }
 
             let routing_key = payload.clone().routing_key;
-            let routing_key_clone = routing_key.clone(); // Clone here
+            let routing_key_clone = routing_key.clone();
 
             let span = debug_span!("remote_execute", routing_key = %routing_key_clone);
             let execution_task = payload.remote_execute().instrument(span);
@@ -720,7 +720,6 @@ impl WorkerRuntime {
             // Create a future that will wait for an IPC termination signal.
             let ipc_sig_term = {
                 let mut ipc_sig_term_rx = ipc_sig_term_rx.clone();
-                let routing_key_clone = routing_key_clone.clone(); // Clone here
                 async move {
                     loop {
                         ipc_sig_term_rx.changed().await.expect("IPC channel closed");
