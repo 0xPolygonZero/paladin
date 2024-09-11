@@ -62,7 +62,7 @@
 //! impl Operation for FibAt {
 //!     type Input = u64;
 //!     type Output = u64;
-//!   
+//!
 //!     fn execute(&self, input: Self::Input) -> Result<Self::Output> {
 //!         match input {
 //!             0 => Ok(0),
@@ -102,7 +102,7 @@
 //! # impl Operation for FibAt {
 //! #    type Input = u64;
 //! #    type Output = u64;
-//! #  
+//! #
 //! #    fn execute(&self, input: Self::Input) -> Result<Self::Output> {
 //! #        match input {
 //! #            0 => Ok(0),
@@ -208,6 +208,7 @@
 //! general, most of your logic should exist in `ops` and `leader`.
 pub mod acker;
 pub mod channel;
+pub mod common;
 pub mod config;
 pub mod contiguous;
 pub mod directive;

@@ -5,11 +5,10 @@
 //! - It supports a notion of message acknowledgement.
 //! - It supports a notion of resource release.
 //! - Rather than returning a tuple of `(sender, receiver)`, it breaks each into
-//!   separate methods.
-//! This is because generally senders and receivers are usually instantiated in
-//! separate process, as the channel is meant to facilitate inter process
-//! communication. This avoids instantiating unnecessary resources when only one
-//! is needed.
+//!   separate methods. This is because generally senders and receivers are
+//!   usually instantiated in separate process, as the channel is meant to
+//!   facilitate inter process communication. This avoids instantiating
+//!   unnecessary resources when only one is needed.
 
 use std::{
     pin::Pin,
@@ -20,7 +19,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use futures::Stream;
 use pin_project::{pin_project, pinned_drop};
-use uuid::Uuid;
 
 use crate::{acker::Acker, queue::Publisher, serializer::Serializable};
 
@@ -70,11 +68,11 @@ pub trait ChannelFactory {
 
     /// Retrieve an existing channel. An identifier is provided when a channel
     /// is issued.
-    async fn get(&self, identifier: Uuid, channel_type: ChannelType) -> Result<Self::Channel>;
+    async fn get(&self, identifier: String, channel_type: ChannelType) -> Result<Self::Channel>;
 
     /// Issue a new channel. An identifier is returned which can be used to
     /// retrieve the channel later in some other process.
-    async fn issue(&self, channel_type: ChannelType) -> Result<(Uuid, Self::Channel)>;
+    async fn issue(&self, channel_type: ChannelType) -> Result<(String, Self::Channel)>;
 }
 
 /// Guard a channel and embed a particular pipe in the lease guard.
