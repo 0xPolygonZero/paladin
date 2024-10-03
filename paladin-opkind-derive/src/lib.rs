@@ -121,7 +121,7 @@ pub fn operation_derive(input: TokenStream) -> TokenStream {
 
                     // Deserialize the input.
                     let input = op.input_from_bytes(task.serializer, &task.input)?;
-                    #paladin_path::__private::tracing::debug!(operation = %stringify!(#name), input = ?input, "executing operation");
+                    #paladin_path::__private::tracing::trace!(operation = %stringify!(#name), input = ?input, "executing operation");
 
                     // Spawn a blocking task to execute the operation.
                     let output = #paladin_path::__private::tokio::task::spawn_blocking(move || {
@@ -135,7 +135,7 @@ pub fn operation_derive(input: TokenStream) -> TokenStream {
                             #paladin_path::operation::FatalStrategy::Terminate
                         ))??;
 
-                        #paladin_path::__private::tracing::debug!(operation = %stringify!(#name), output = ?typed_output, "operation executed successfully");
+                        #paladin_path::__private::tracing::trace!(operation = %stringify!(#name), output = ?typed_output, "operation executed successfully");
 
                         // Serialize the output.
                         let serialized_output = op.output_to_bytes(task.serializer, typed_output)?;
