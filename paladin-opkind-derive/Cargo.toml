@@ -1,6 +1,6 @@
 [package]
 name = "paladin-opkind-derive"
-version = "0.4.1"
+version = "0.4.2"
 description = "Derive macro for paladin."
 license.workspace = true
 edition.workspace = true
