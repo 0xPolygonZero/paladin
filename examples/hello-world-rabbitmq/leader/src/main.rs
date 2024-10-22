@@ -25,7 +25,8 @@ async fn main() -> Result<()> {
     let args = Cli::parse();
     let runtime = Runtime::from_config(&args.options, register()).await?;
 
-    let input = ['h', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd', '!'];
+    let input = ['h', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd', '!', 's', 'm', 'a', 'l', 'l', '!',
+        'S', 'm', 'o', 'r', 'i', 'm', 'e', 'v', 'i', 'v', 'e', 'r', 'o', '!'];
     let computation = IndexedStream::from(input)
         .map(&CharToString)
         .fold(&StringConcat);
@@ -36,7 +37,7 @@ async fn main() -> Result<()> {
     let result = result?;
 
     info!("result: {:?}", result);
-    assert_eq!(result, "hello world!".to_string());
+    assert_eq!(result, "hello world!small!Smorimevivero!".to_string());
 
     Ok(())
 }

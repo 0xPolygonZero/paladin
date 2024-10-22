@@ -1,3 +1,4 @@
+use std::thread::sleep;
 use paladin::{
     operation::{Monoid, Operation, Result},
     registry, RemoteExecute,
@@ -14,6 +15,9 @@ impl Operation for CharToString {
     type Output = String;
 
     fn execute(&self, input: Self::Input) -> Result<Self::Output> {
+        println!(">>>>>>>>>> EXECUTE2 CharToString: {:?}", input);
+        sleep(std::time::Duration::from_secs(2));
+        println!(">>>>>>>>>> FINISH2 CharToString: {:?}", input);
         Ok(input.to_string())
     }
 }

@@ -22,7 +22,7 @@ services:
       - AMQP_URI=amqp://rabbitmq:5672
     deploy:
       mode: replicated
-      replicas: 6
+      replicas: 3
   rabbitmq:
     image: rabbitmq:3-management
     ports:
