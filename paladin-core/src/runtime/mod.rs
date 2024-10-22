@@ -121,8 +121,8 @@ pub struct Runtime {
     _marker: Marker,
 }
 
-const IPC_ROUTING_KEY: &str = "ipc-routing-key";
-pub const DEFAULT_ROUTING_KEY: &str = "default";
+pub const COMMAND_IPC_ROUTING_KEY: &str = "command-ipc-routing-key";
+pub const TASK_IPC_ROUTING_KEY: &str = "task-ipc-routing-key";
 
 impl Runtime {
     /// Initializes the [`Runtime`] with the provided [`Config`].
@@ -133,7 +133,7 @@ impl Runtime {
                 config
                     .task_bus_routing_key
                     .clone()
-                    .unwrap_or_else(|| DEFAULT_ROUTING_KEY.to_string()),
+                    .unwrap_or_else(|| TASK_IPC_ROUTING_KEY.to_string()),
                 ChannelType::ExactlyOnce,
             )
             .await?;
@@ -361,6 +361,19 @@ impl Runtime {
             LeaseGuard::new(result_channel, Box::new(ack_composed_receiver)),
         ))
     }
+
+    /// Get a [`Publisher`] for dispatching [`CommandIpc`] messages.
+    ///
+    /// Typically used by a leader node to send commands to workers (a.g. abort
+    /// work) or worker node to notify other workers of a fatal error.
+    #[instrument(skip(self), level = "trace")]
+    pub async fn get_command_ipc_sender(&self) -> Result<Sender<CommandIpc>> {
+        self.channel_factory
+            .get(COMMAND_IPC_ROUTING_KEY.to_string(), ChannelType::Broadcast)
+            .await?
+            .sender()
+            .await
+    }
 }
 
 /// Drop the worker emulator when the runtime is dropped.
@@ -401,10 +414,11 @@ pub struct ExecutionErr<E> {
     strategy: FatalStrategy,
 }
 
-/// Inter-process messages between workers.
+/// Command and error inter-process messages between leader and workers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum WorkerIpc {
+pub enum CommandIpc {
     ExecutionError { routing_key: String },
+    Abort { routing_key: String },
 }
 
 impl WorkerRuntime {
@@ -416,7 +430,7 @@ impl WorkerRuntime {
                 config
                     .task_bus_routing_key
                     .clone()
-                    .unwrap_or_else(|| DEFAULT_ROUTING_KEY.to_string()),
+                    .unwrap_or_else(|| TASK_IPC_ROUTING_KEY.to_string()),
                 ChannelType::ExactlyOnce,
             )
             .await?;
@@ -441,30 +455,30 @@ impl WorkerRuntime {
             .await
     }
 
-    /// Get a [`Publisher`] for dispatching [`WorkerIpc`] messages.
+    /// Get a [`Publisher`] for dispatching [`CommandIpc`] messages.
     ///
-    /// Typically used by a worker node to notify other workers of a fatal
-    /// error.
+    /// Typically used by a leader node to send commands to workers (a.g. abort
+    /// work) or worker node to notify other workers of a fatal error.
     #[instrument(skip(self), level = "trace")]
-    pub async fn get_ipc_sender(&self) -> Result<Sender<WorkerIpc>> {
+    pub async fn get_command_ipc_sender(&self) -> Result<Sender<CommandIpc>> {
         self.channel_factory
-            .get(IPC_ROUTING_KEY.to_string(), ChannelType::Broadcast)
+            .get(COMMAND_IPC_ROUTING_KEY.to_string(), ChannelType::Broadcast)
             .await?
             .sender()
             .await
     }
 
-    /// Get a [`Stream`] for receiving [`WorkerIpc`] messages.
+    /// Get a [`Stream`] for receiving [`CommandIpc`] messages.
     ///
-    /// Typically used by a worker node to listen for fatal errors from other
-    /// workers.
+    /// Typically used by a worker node to listen for command instructions (e.g.
+    /// abort) from the leader or fatal errors from other workers.
     #[instrument(skip(self), level = "trace")]
-    pub async fn get_ipc_receiver(&self) -> Result<BoxStream<'static, WorkerIpc>> {
+    pub async fn get_command_ipc_receiver(&self) -> Result<BoxStream<'static, CommandIpc>> {
         let s = self
             .channel_factory
-            .get(IPC_ROUTING_KEY.to_string(), ChannelType::Broadcast)
+            .get(COMMAND_IPC_ROUTING_KEY.to_string(), ChannelType::Broadcast)
             .await?
-            .receiver::<WorkerIpc>()
+            .receiver::<CommandIpc>()
             .await?;
 
         Ok(s.then(|(message, acker)| async move {
@@ -552,11 +566,11 @@ impl WorkerRuntime {
             FatalStrategy::Terminate => {
                 // Notify other workers of the error.
                 let (ipc, sender) = try_join!(
-                    self.get_ipc_sender(),
+                    self.get_command_ipc_sender(),
                     self.get_result_sender(routing_key.clone())
                 )?;
 
-                let ipc_msg = WorkerIpc::ExecutionError { routing_key };
+                let ipc_msg = CommandIpc::ExecutionError { routing_key };
                 let sender_msg = AnyTaskResult::Err(err.to_string());
 
                 try_join!(ipc.publish(&ipc_msg), sender.publish(&sender_msg))?;
@@ -665,14 +679,15 @@ impl WorkerRuntime {
 
         // Spawn a task that will listen for IPC termination signals and mark jobs as
         // terminated.
-        let mut ipc_receiver = self.get_ipc_receiver().await?;
+        let mut ipc_receiver = self.get_command_ipc_receiver().await?;
         let remote_ipc_sig_term_handler = tokio::spawn({
             let terminated_jobs = terminated_jobs.clone();
 
             async move {
                 while let Some(ipc) = ipc_receiver.next().await {
                     match ipc {
-                        WorkerIpc::ExecutionError { routing_key } => {
+                        CommandIpc::ExecutionError { routing_key }
+                        | CommandIpc::Abort { routing_key } => {
                             // Mark the job as terminated if it hasn't been already.
                             if mark_terminated(&terminated_jobs, routing_key.clone()) {
                                 warn!(routing_key = %routing_key, "received IPC termination signal");
