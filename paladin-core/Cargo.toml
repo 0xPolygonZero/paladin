@@ -41,7 +41,7 @@ crossbeam = "0.8.2"
 postcard = { version = "1.0.8", features = ["use-std"] }
 linkme = "0.3.17"
 crossbeam-skiplist = "0.1.1"
-paladin-opkind-derive = "0.4.2"
+paladin-opkind-derive =  { path = "../paladin-opkind-derive" }
 
 [dev-dependencies]
 # Required for certain doc tests which showcase generic numeric operations
