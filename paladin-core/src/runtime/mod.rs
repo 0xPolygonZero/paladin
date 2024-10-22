@@ -113,7 +113,6 @@ type CoordinatedTaskChannel<'a, Op, Metadata> = (
 ///
 /// See the [runtime module documentation](crate::runtime) for more information
 /// on runtime semantics.
-
 pub struct Runtime {
     channel_factory: DynamicChannelFactory,
     task_channel: DynamicChannel,

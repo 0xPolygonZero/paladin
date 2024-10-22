@@ -691,6 +691,7 @@ mod helpers {
 }
 
 #[cfg(test)]
+#[allow(clippy::needless_return)]
 mod exactly_once {
 
     use tokio::{join, try_join};
@@ -798,6 +799,7 @@ mod exactly_once {
 }
 
 #[cfg(test)]
+#[allow(clippy::needless_return)]
 mod broadcast {
     use tokio::{join, try_join};
 

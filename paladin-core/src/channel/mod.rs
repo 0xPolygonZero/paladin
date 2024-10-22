@@ -76,9 +76,9 @@ pub trait ChannelFactory {
 }
 
 /// Guard a channel and embed a particular pipe in the lease guard.
+///
 /// A single pipe is embedded, as the guard is meant to be held by a single end
 /// of the channel. The lease guard will release the channel when it is dropped.
-///
 /// [`LeaseGuard`] implements [`Stream`] where the pipe is a [`Stream`], and can
 /// be used as a [`Stream`] directly.
 #[pin_project(PinnedDrop)]
