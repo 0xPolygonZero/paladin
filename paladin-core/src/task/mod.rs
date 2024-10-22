@@ -161,7 +161,10 @@ impl AnyTask {
     /// [`RemoteExecute::ID`](crate::operation::RemoteExecute::ID) field to
     /// acquire the correct execution pointer from the [`static@OPERATIONS`]
     /// slice.
-    pub async fn remote_execute(self) -> crate::operation::Result<AnyTaskOutput> {
-        OPERATIONS[self.operation_id as usize](self).await
+    pub async fn remote_execute(
+        self,
+        abort_signal: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> crate::operation::Result<AnyTaskOutput> {
+        OPERATIONS[self.operation_id as usize](self, abort_signal).await
     }
 }

@@ -238,6 +238,7 @@ pub mod __private {
     #[linkme::distributed_slice]
     pub static OPERATIONS: [fn(
         crate::task::AnyTask,
+        abort_signal: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ) -> futures::future::BoxFuture<
         'static,
         crate::operation::Result<crate::task::AnyTaskOutput>,

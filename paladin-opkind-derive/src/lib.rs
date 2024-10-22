@@ -109,7 +109,7 @@ pub fn operation_derive(input: TokenStream) -> TokenStream {
 
         #[#paladin_path::__private::linkme::distributed_slice(#paladin_path::__private::OPERATIONS)]
         #linkme_path_override
-        fn #function_name(task: #paladin_path::task::AnyTask) -> #paladin_path::__private::futures::future::BoxFuture<
+        fn #function_name(task: #paladin_path::task::AnyTask, abort_signal: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,) -> #paladin_path::__private::futures::future::BoxFuture<
             'static,
             #paladin_path::operation::Result<#paladin_path::task::AnyTaskOutput>
         > {
@@ -118,6 +118,7 @@ pub fn operation_derive(input: TokenStream) -> TokenStream {
                 let get_result = || async {
                     // Deserialize the operation.
                     let op = #name::from_bytes(task.serializer, &task.op)?;
+                    let abort_signal = abort_signal.clone();
 
                     // Deserialize the input.
                     let input = op.input_from_bytes(task.serializer, &task.input)?;
@@ -127,7 +128,7 @@ pub fn operation_derive(input: TokenStream) -> TokenStream {
                     let output = #paladin_path::__private::tokio::task::spawn_blocking(move || {
                         // Execute the operation, catching panics.
                         let typed_output = std::panic::catch_unwind(::std::panic::AssertUnwindSafe(||
-                            op.execute(input)
+                            op.execute(input, abort_signal)
                         ))
                         // Convert panics to fatal operation errors.
                         .map_err(|_| #paladin_path::operation::FatalError::from_str(

@@ -117,7 +117,11 @@ pub trait Operation: RemoteExecute + Serializable {
     type Output: Serializable + Debug;
 
     /// Execute the operation on the given input.
-    fn execute(&self, input: Self::Input) -> Result<Self::Output>;
+    fn execute(
+        &self,
+        input: Self::Input,
+        abort_signal: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Result<Self::Output>;
 
     /// Get the input from a byte representation.
     fn input_from_bytes(&self, serializer: Serializer, input: &[u8]) -> Result<Self::Input> {
@@ -134,9 +138,14 @@ pub trait Operation: RemoteExecute + Serializable {
     }
 
     /// Execute the operation on the given input as bytes.
-    fn execute_as_bytes(&self, serializer: Serializer, input: &[u8]) -> Result<Bytes> {
+    fn execute_as_bytes(
+        &self,
+        serializer: Serializer,
+        input: &[u8],
+        abort_signal: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Result<Bytes> {
         self.input_from_bytes(serializer, input)
-            .and_then(|input| self.execute(input))
+            .and_then(|input| self.execute(input, abort_signal))
             .and_then(|output| self.output_to_bytes(serializer, output))
     }
 
@@ -170,7 +179,12 @@ pub trait Monoid: RemoteExecute + Serializable {
     fn empty(&self) -> Self::Elem;
 
     /// Combine two elements using the operation.
-    fn combine(&self, a: Self::Elem, b: Self::Elem) -> Result<Self::Elem>;
+    fn combine(
+        &self,
+        a: Self::Elem,
+        b: Self::Elem,
+        abort_signal: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Result<Self::Elem>;
 }
 
 /// Implement the [`Operation`] trait for types that support the binary
@@ -185,8 +199,12 @@ where
     type Output = T::Elem;
 
     /// Execute the operation on the given input.
-    fn execute(&self, (a, b): Self::Input) -> Result<Self::Output> {
-        self.combine(a, b)
+    fn execute(
+        &self,
+        (a, b): Self::Input,
+        abort_signal: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Result<Self::Output> {
+        self.combine(a, b, abort_signal)
     }
 }
 

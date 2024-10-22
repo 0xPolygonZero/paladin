@@ -48,6 +48,7 @@
 //! communicate, and provides a simple interface for interacting with these
 //! channels.
 
+use std::sync::atomic::Ordering;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -123,6 +124,7 @@ pub struct Runtime {
 
 pub const COMMAND_IPC_ROUTING_KEY: &str = "command-ipc-routing-key";
 pub const TASK_IPC_ROUTING_KEY: &str = "task-ipc-routing-key";
+pub const COMMAND_IPC_ABORT_ALL_KEY: &str = "abort-all-key";
 
 impl Runtime {
     /// Initializes the [`Runtime`] with the provided [`Config`].
@@ -657,6 +659,7 @@ impl WorkerRuntime {
         let mut task_stream = self.get_task_receiver().await?;
 
         const TERMINATION_CLEAR_INTERVAL: Duration = Duration::from_secs(60);
+        const ABORT_SIGNAL_SHUTDOWN_INTERVAL: Duration = Duration::from_secs(10);
         // Keep track of terminated jobs to avoid processing new tasks associated to
         // them.
         let terminated_jobs: Arc<DashMap<String, Instant>> = Default::default();
@@ -679,12 +682,12 @@ impl WorkerRuntime {
 
         // Spawn a task that will listen for IPC termination signals and mark jobs as
         // terminated.
-        let mut ipc_receiver = self.get_command_ipc_receiver().await?;
-        let remote_ipc_sig_term_handler = tokio::spawn({
+        let mut command_receiver = self.get_command_ipc_receiver().await?;
+        let remote_command_sig_term_handler = tokio::spawn({
             let terminated_jobs = terminated_jobs.clone();
 
             async move {
-                while let Some(ipc) = ipc_receiver.next().await {
+                while let Some(ipc) = command_receiver.next().await {
                     match ipc {
                         CommandIpc::ExecutionError { routing_key }
                         | CommandIpc::Abort { routing_key } => {
@@ -717,6 +720,7 @@ impl WorkerRuntime {
         }
 
         while let Some((payload, acker)) = task_stream.next().await {
+            let abort_signal = Arc::new(std::sync::atomic::AtomicBool::new(false));
             // Skip tasks associated with terminated jobs.
             if terminated_jobs.contains_key(&payload.clone().routing_key) {
                 trace!(routing_key = %payload.clone().routing_key, "skipping terminated job");
@@ -729,7 +733,9 @@ impl WorkerRuntime {
             let routing_key_clone = routing_key.clone();
 
             let span = debug_span!("remote_execute", routing_key = %routing_key_clone);
-            let execution_task = payload.remote_execute().instrument(span);
+            let execution_task = payload
+                .remote_execute(Some(abort_signal.clone()))
+                .instrument(span);
 
             // Create a future that will wait for an IPC termination signal.
             let ipc_sig_term = {
@@ -737,7 +743,12 @@ impl WorkerRuntime {
                 async move {
                     loop {
                         ipc_sig_term_rx.changed().await.expect("IPC channel closed");
-                        if *ipc_sig_term_rx.borrow() == routing_key_clone {
+                        let received_key = ipc_sig_term_rx.borrow().clone();
+                        if received_key == routing_key_clone
+                            || received_key == COMMAND_IPC_ABORT_ALL_KEY
+                        {
+                            abort_signal.store(true, Ordering::SeqCst);
+                            tokio::time::sleep(ABORT_SIGNAL_SHUTDOWN_INTERVAL).await;
                             return true;
                         }
                     }
@@ -779,7 +790,7 @@ impl WorkerRuntime {
             }
         }
 
-        remote_ipc_sig_term_handler.abort();
+        remote_command_sig_term_handler.abort();
         reaper.abort();
 
         Ok(())
