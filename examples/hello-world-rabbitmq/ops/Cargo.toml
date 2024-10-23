@@ -7,5 +7,7 @@ edition = "2021"
 
 [dependencies]
 serde = "1.0.183"
+anyhow = "1.0.90"
+tracing = "0.1"
 
 paladin-core = { path = "../../../paladin-core" }

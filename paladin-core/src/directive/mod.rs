@@ -52,6 +52,7 @@ pub trait Directive {
     /// #    operation::{Operation, Result},
     /// #    directive::{Directive, IndexedStream},
     /// #    runtime::Runtime,
+    /// #    AbortSignal,
     /// # };
     /// # use serde::{Deserialize, Serialize};
     /// #
@@ -61,7 +62,7 @@ pub trait Directive {
     ///     type Input = String;
     ///     type Output = usize;
     ///
-    ///     fn execute(&self, input: String) -> Result<usize> {
+    ///     fn execute(&self, input: String, abort: AbortSignal) -> Result<usize> {
     ///         Ok(input.len())
     ///     }
     /// }
@@ -90,6 +91,7 @@ pub trait Directive {
     /// #    operation::{Operation, Result},
     /// #    directive::{Directive, IndexedStream},
     /// #    runtime::Runtime,
+    /// #    AbortSignal,
     /// # };
     /// # use serde::{Deserialize, Serialize};
     /// #
@@ -99,7 +101,7 @@ pub trait Directive {
     ///     type Input = i32;
     ///     type Output = i32;
     ///
-    ///     fn execute(&self, input: i32) -> Result<i32> {
+    ///     fn execute(&self, input: i32, abort: AbortSignal) -> Result<i32> {
     ///         Ok(self.0 * input)
     ///     }
     /// }
@@ -137,6 +139,7 @@ pub trait Directive {
     /// #    operation::{Operation, Monoid, Result},
     /// #    directive::{Directive, IndexedStream},
     /// #    runtime::Runtime,
+    /// #    AbortSignal
     /// # };
     /// # use serde::{Deserialize, Serialize};
     /// #
@@ -145,7 +148,7 @@ pub trait Directive {
     /// impl Monoid for Multiply {
     ///     type Elem = i32;
     ///
-    ///     fn combine(&self, a: i32, b: i32) -> Result<i32> {
+    ///     fn combine(&self, a: i32, b: i32, abort: AbortSignal) -> Result<i32> {
     ///         Ok(a * b)
     ///     }
     ///
