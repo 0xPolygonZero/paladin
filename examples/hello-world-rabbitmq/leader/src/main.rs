@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -10,7 +11,7 @@ use paladin::{
     directive::{indexed_stream::IndexedStream, Directive},
     runtime::Runtime,
 };
-use tracing::info;
+use tracing::{error, info, warn};
 
 mod init;
 
@@ -18,11 +19,33 @@ mod init;
 pub struct Cli {
     #[command(flatten)]
     pub options: Config,
-    #[arg(long, short)]
+    /// Optional timeout for job in the seconds
+    #[arg(long, short, env = "JOB_TIMEOUT")]
     pub timeout: Option<u64>,
 }
 
 const INPUT: &str = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.";
+
+async fn set_abort_timeout_job(timeout: u64, runtime: Arc<Runtime>) {
+    tokio::spawn(async move {
+        let command_channel = runtime
+            .get_command_ipc_sender()
+            .await
+            .expect("retrieved ipc sender");
+        tokio::time::sleep(Duration::from_secs(timeout)).await;
+        warn!("User timeout expired, aborting the execution...");
+        if let Err(e) = command_channel
+            .publish(&CommandIpc::Abort {
+                routing_key: paladin::runtime::COMMAND_IPC_ABORT_ALL_KEY.into(),
+            })
+            .await
+        {
+            error!("Unable to send abort signal: {e:?}");
+        } else {
+            info!("Abort signal successfully sent");
+        }
+    });
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -37,26 +60,9 @@ async fn main() -> Result<()> {
         .map(&CharToString)
         .fold(&StringConcat);
 
-    let runtime_ = runtime.clone();
-    tokio::spawn(async move {
-        let command_channel = runtime_
-            .get_command_ipc_sender()
-            .await
-            .expect("retrieved ipc sender");
-        println!("Waiting to abort the execution...");
-        tokio::time::sleep(Duration::from_secs(10)).await;
-        println!("Aborting the execution...");
-        if let Err(e) = command_channel
-            .publish(&CommandIpc::Abort {
-                routing_key: paladin::runtime::COMMAND_IPC_ABORT_ALL_KEY.into(),
-            })
-            .await
-        {
-            println!("Unable to send abort signal: {e}");
-        } else {
-            println!("Abort signal successfully sent");
-        }
-    });
+    if let Some(timeout) = args.timeout {
+        set_abort_timeout_job(timeout, runtime.clone()).await;
+    }
 
     let result = computation.run(&runtime).await;
     runtime

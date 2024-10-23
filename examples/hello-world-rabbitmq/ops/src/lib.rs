@@ -33,7 +33,7 @@ impl Operation for CharToString {
                     .load(std::sync::atomic::Ordering::SeqCst)
             {
                 return Err(OperationError::Fatal {
-                    err: anyhow::anyhow!("aborted on command at CharToString iteration {i} for input {input:?}"),
+                    err: anyhow::anyhow!("aborted per request at CharToString iteration {i} for input {input:?}"),
                     strategy: FatalStrategy::Terminate,
                 });
             }
