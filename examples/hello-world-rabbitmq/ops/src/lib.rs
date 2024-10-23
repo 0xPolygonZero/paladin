@@ -1,6 +1,6 @@
 use std::thread::sleep;
 
-use paladin::__private::tracing::info;
+use tracing::info;
 use paladin::operation::{FatalStrategy, OperationError};
 use paladin::{
     operation::{Monoid, Operation, Result},

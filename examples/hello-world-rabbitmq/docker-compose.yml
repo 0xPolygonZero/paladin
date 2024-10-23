@@ -10,7 +10,7 @@ services:
     environment:
       - RUST_LOG=info
       - AMQP_URI=amqp://rabbitmq:5672
-      - JOB_TIMEOUT=10
+      - JOB_TIMEOUT=30
   worker:
     build:
       context: ../../

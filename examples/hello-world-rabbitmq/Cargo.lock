@@ -1400,6 +1400,7 @@ dependencies = [
  "anyhow",
  "paladin-core",
  "serde",
+ "tracing",
 ]
 
 [[package]]
