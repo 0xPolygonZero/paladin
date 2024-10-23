@@ -32,7 +32,7 @@
 //! ### Defining an [`Operation`]:
 //!
 //! ```
-//! use paladin::{RemoteExecute, operation::{Operation, Result}};
+//! use paladin::{RemoteExecute, operation::{Operation, Result}, AbortSignal};
 //! use serde::{Deserialize, Serialize};
 //!
 //! #[derive(Serialize, Deserialize, RemoteExecute)]
@@ -42,7 +42,7 @@
 //!     type Input = String;
 //!     type Output = usize;
 //!     
-//!     fn execute(&self, input: Self::Input) -> Result<Self::Output> {
+//!     fn execute(&self, input: Self::Input, abort: AbortSignal) -> Result<Self::Output> {
 //!         Ok(input.len())
 //!     }
 //! }
@@ -51,7 +51,7 @@
 //! ### Defining a [`Monoid`]:
 //!
 //! ```
-//! use paladin::{RemoteExecute, operation::{Monoid, Operation, Result}};
+//! use paladin::{RemoteExecute, operation::{Monoid, Operation, Result}, AbortSignal};
 //! use serde::{Deserialize, Serialize};
 //!
 //! #[derive(Serialize, Deserialize, RemoteExecute)]
@@ -60,7 +60,7 @@
 //! impl Monoid for StringConcat {
 //!     type Elem = String;
 //!     
-//!     fn combine(&self, a: Self::Elem, b: Self::Elem) -> Result<Self::Elem> {
+//!     fn combine(&self, a: Self::Elem, b: Self::Elem, abort: AbortSignal) -> Result<Self::Elem> {
 //!         Ok(a + &b)
 //!     }
 //!     
@@ -73,7 +73,7 @@
 //! ### An [`Operation`] with constructor arguments:
 //!
 //! ```
-//! use paladin::{RemoteExecute, operation::{Monoid, Operation, Result}};
+//! use paladin::{RemoteExecute, operation::{Monoid, Operation, Result}, AbortSignal};
 //! use serde::{Deserialize, Serialize};
 //!
 //! #[derive(Serialize, Deserialize, RemoteExecute)]
@@ -83,7 +83,7 @@
 //!     type Input = i32;
 //!     type Output = i32;
 //!     
-//!     fn execute(&self, input: Self::Input) -> Result<Self::Output> {
+//!     fn execute(&self, input: Self::Input, abort: AbortSignal) -> Result<Self::Output> {
 //!         Ok(self.0 * input)
 //!     }
 //! }
@@ -117,11 +117,7 @@ pub trait Operation: RemoteExecute + Serializable {
     type Output: Serializable + Debug;
 
     /// Execute the operation on the given input.
-    fn execute(
-        &self,
-        input: Self::Input,
-        abort_signal: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    ) -> Result<Self::Output>;
+    fn execute(&self, input: Self::Input, abort: AbortSignal) -> Result<Self::Output>;
 
     /// Get the input from a byte representation.
     fn input_from_bytes(&self, serializer: Serializer, input: &[u8]) -> Result<Self::Input> {
@@ -142,10 +138,10 @@ pub trait Operation: RemoteExecute + Serializable {
         &self,
         serializer: Serializer,
         input: &[u8],
-        abort_signal: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+        abort: AbortSignal,
     ) -> Result<Bytes> {
         self.input_from_bytes(serializer, input)
-            .and_then(|input| self.execute(input, abort_signal))
+            .and_then(|input| self.execute(input, abort))
             .and_then(|output| self.output_to_bytes(serializer, output))
     }
 
@@ -179,12 +175,7 @@ pub trait Monoid: RemoteExecute + Serializable {
     fn empty(&self) -> Self::Elem;
 
     /// Combine two elements using the operation.
-    fn combine(
-        &self,
-        a: Self::Elem,
-        b: Self::Elem,
-        abort_signal: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    ) -> Result<Self::Elem>;
+    fn combine(&self, a: Self::Elem, b: Self::Elem, abort: AbortSignal) -> Result<Self::Elem>;
 }
 
 /// Implement the [`Operation`] trait for types that support the binary
@@ -199,12 +190,8 @@ where
     type Output = T::Elem;
 
     /// Execute the operation on the given input.
-    fn execute(
-        &self,
-        (a, b): Self::Input,
-        abort_signal: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    ) -> Result<Self::Output> {
-        self.combine(a, b, abort_signal)
+    fn execute(&self, (a, b): Self::Input, abort: AbortSignal) -> Result<Self::Output> {
+        self.combine(a, b, abort)
     }
 }
 
@@ -252,7 +239,7 @@ pub mod marker {
 ///
 /// In `my_operations`, you define your operations:
 /// ```
-/// use paladin::{registry, RemoteExecute, operation::{Operation, Result}};
+/// use paladin::{registry, RemoteExecute, operation::{Operation, Result}, AbortSignal};
 /// use serde::{Deserialize, Serialize};
 ///
 /// #[derive(Serialize, Deserialize, RemoteExecute)]
@@ -262,7 +249,7 @@ pub mod marker {
 ///     type Input = ();
 ///     type Output = ();
 ///     
-///     fn execute(&self, _input: Self::Input) -> Result<Self::Output> {
+///     fn execute(&self, _input: Self::Input, abort: AbortSignal) -> Result<Self::Output> {
 ///         Ok(())
 ///     }
 /// }
@@ -275,7 +262,7 @@ pub mod marker {
 /// In `my_worker`, you instantiate the worker runtime:
 /// ```
 /// # mod my_operations {
-/// #    use paladin::{registry, RemoteExecute, operation::{Operation, Result}};
+/// #    use paladin::{registry, RemoteExecute, operation::{Operation, Result}, AbortSignal};
 /// #    use serde::{Deserialize, Serialize};
 /// #
 /// #    #[derive(Serialize, Deserialize, RemoteExecute)]
@@ -285,7 +272,7 @@ pub mod marker {
 /// #        type Input = ();
 /// #        type Output = ();
 /// #    
-/// #        fn execute(&self, _input: Self::Input) -> Result<Self::Output> {
+/// #        fn execute(&self, _input: Self::Input, abort: AbortSignal) -> Result<Self::Output> {
 /// #            Ok(())
 /// #        }
 /// #    }
@@ -321,3 +308,5 @@ macro_rules! registry {
 
 mod error;
 pub use error::*;
+
+use crate::AbortSignal;

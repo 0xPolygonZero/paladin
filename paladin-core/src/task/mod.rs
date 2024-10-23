@@ -14,6 +14,7 @@ use crate::{
     __private::OPERATIONS,
     operation::Operation,
     serializer::{Serializable, Serializer},
+    AbortSignal,
 };
 
 /// A [`Task`] encodes an [`Operation`] paired with arguments.
@@ -163,8 +164,8 @@ impl AnyTask {
     /// slice.
     pub async fn remote_execute(
         self,
-        abort_signal: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+        abort: AbortSignal,
     ) -> crate::operation::Result<AnyTaskOutput> {
-        OPERATIONS[self.operation_id as usize](self, abort_signal).await
+        OPERATIONS[self.operation_id as usize](self, abort).await
     }
 }

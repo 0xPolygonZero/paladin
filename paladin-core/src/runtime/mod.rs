@@ -265,6 +265,7 @@ impl Runtime {
     ///     runtime::Runtime,
     ///     task::Task,
     ///     operation::{Operation, Result},
+    ///     AbortSignal,
     /// };
     /// use serde::{Deserialize, Serialize};
     /// use futures::StreamExt;
@@ -279,7 +280,7 @@ impl Runtime {
     /// #    type Input = String;
     /// #    type Output = usize;
     /// #
-    /// #    fn execute(&self, input: Self::Input) -> Result<Self::Output> {
+    /// #    fn execute(&self, input: Self::Input, abort: AbortSignal) -> Result<Self::Output> {
     /// #       Ok(input.len())
     /// #    }
     /// # }
@@ -505,6 +506,7 @@ impl WorkerRuntime {
     ///     registry,
     ///     runtime::WorkerRuntime,
     ///     operation::{Operation, Result},
+    ///     AbortSignal
     /// };
     /// use serde::{Deserialize, Serialize};
     /// use futures::StreamExt;
@@ -516,7 +518,7 @@ impl WorkerRuntime {
     /// #    type Input = String;
     /// #    type Output = usize;
     /// #
-    /// #    fn execute(&self, input: Self::Input) -> Result<Self::Output> {
+    /// #    fn execute(&self, input: Self::Input, abort: AbortSignal) -> Result<Self::Output> {
     /// #        Ok(input.len())
     /// #    }
     /// # }
@@ -622,6 +624,7 @@ impl WorkerRuntime {
     ///     task::Task,
     ///     operation::{Result, Operation},
     ///     registry,
+    ///     AbortSignal
     /// };
     /// use clap::Parser;
     /// use serde::{Deserialize, Serialize};
@@ -631,7 +634,7 @@ impl WorkerRuntime {
     /// #    type Input = String;
     /// #    type Output = usize;
     /// #
-    /// #    fn execute(&self, input: Self::Input) -> Result<Self::Output> {
+    /// #    fn execute(&self, input: Self::Input, abort: AbortSignal) -> Result<Self::Output> {
     /// #       Ok(input.len())
     /// #    }
     /// # }
@@ -720,7 +723,7 @@ impl WorkerRuntime {
         }
 
         while let Some((payload, acker)) = task_stream.next().await {
-            let abort_signal = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let abort = Arc::new(std::sync::atomic::AtomicBool::new(false));
             // Skip tasks associated with terminated jobs.
             if terminated_jobs.contains_key(&payload.clone().routing_key) {
                 trace!(routing_key = %payload.clone().routing_key, "skipping terminated job");
@@ -733,9 +736,7 @@ impl WorkerRuntime {
             let routing_key_clone = routing_key.clone();
 
             let span = debug_span!("remote_execute", routing_key = %routing_key_clone);
-            let execution_task = payload
-                .remote_execute(Some(abort_signal.clone()))
-                .instrument(span);
+            let execution_task = payload.remote_execute(Some(abort.clone())).instrument(span);
 
             // Create a future that will wait for an IPC termination signal.
             let ipc_sig_term = {
@@ -747,7 +748,7 @@ impl WorkerRuntime {
                         if received_key == routing_key_clone
                             || received_key == COMMAND_IPC_ABORT_ALL_KEY
                         {
-                            abort_signal.store(true, Ordering::SeqCst);
+                            abort.store(true, Ordering::SeqCst);
                             tokio::time::sleep(ABORT_SIGNAL_SHUTDOWN_INTERVAL).await;
                             return true;
                         }

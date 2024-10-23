@@ -2,10 +2,7 @@ use std::thread::sleep;
 
 use tracing::info;
 use paladin::operation::{FatalStrategy, OperationError};
-use paladin::{
-    operation::{Monoid, Operation, Result},
-    registry, RemoteExecute,
-};
+use paladin::{operation::{Monoid, Operation, Result}, registry, AbortSignal, RemoteExecute};
 use serde::{Deserialize, Serialize};
 
 registry!();
@@ -20,14 +17,14 @@ impl Operation for CharToString {
     fn execute(
         &self,
         input: Self::Input,
-        abort_signal: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+        abort: AbortSignal,
     ) -> Result<Self::Output> {
         for i in 1..10 {
             // Simulate some long job. Check occasionally for the abort signal
             // to terminate the job prematurely
             sleep(std::time::Duration::from_millis(100));
-            if abort_signal.is_some()
-                && abort_signal
+            if abort.is_some()
+                && abort
                     .as_ref()
                     .unwrap()
                     .load(std::sync::atomic::Ordering::SeqCst)
@@ -57,7 +54,7 @@ impl Monoid for StringConcat {
         &self,
         a: Self::Elem,
         b: Self::Elem,
-        _abort_signal: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+        _abort: AbortSignal,
     ) -> Result<Self::Elem> {
         Ok(a + &b)
     }

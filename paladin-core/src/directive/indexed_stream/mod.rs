@@ -60,6 +60,7 @@ use futures::{Stream, StreamExt, TryStreamExt};
 /// #    operation::{Operation, Monoid, Result},
 /// #    directive::{Directive, IndexedStream},
 /// #    runtime::Runtime,
+/// #    AbortSignal
 /// # };
 /// # use serde::{Deserialize, Serialize};
 /// #
@@ -68,8 +69,9 @@ use futures::{Stream, StreamExt, TryStreamExt};
 /// impl Monoid for Multiply {
 ///     type Elem = i32;
 ///
-///     fn combine(&self, a: i32, b: i32) -> Result<i32> {
-///         Ok(a * b)
+///     fn combine(&self, a: i32, b: i32, abort: AbortSignal) -> Result<i32> {
+///         use paladin::AbortSignal;
+/// Ok(a * b)
 ///     }
 ///
 ///     fn empty(&self) -> i32 {
@@ -83,7 +85,7 @@ use futures::{Stream, StreamExt, TryStreamExt};
 ///     type Input = i32;
 ///     type Output = i32;
 ///
-///     fn execute(&self, input: i32) -> Result<i32> {
+///     fn execute(&self, input: i32, abort: AbortSignal) -> Result<i32> {
 ///         Ok(self.0 * input)
 ///     }
 /// }
