@@ -190,7 +190,7 @@ where
 ///
 /// This is a passthrough implementation, which simply delegates to the inner
 /// stream.
-impl<'a, T> Stream for IndexedStream<'a, T> {
+impl<T> Stream for IndexedStream<'_, T> {
     type Item = Result<(usize, T)>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {

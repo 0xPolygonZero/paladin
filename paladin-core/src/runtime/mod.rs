@@ -748,6 +748,8 @@ impl WorkerRuntime {
             // Create a future that will wait for an IPC termination signal.
             let ipc_sig_term = {
                 let mut ipc_sig_term_rx = ipc_sig_term_rx.clone();
+                let abort_worker_execution = abort_worker_execution.clone();
+                let routing_key = routing_key.clone();
                 async move {
                     loop {
                         ipc_sig_term_rx.changed().await.expect("IPC channel closed");

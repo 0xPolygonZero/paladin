@@ -116,7 +116,7 @@ pub enum AnyTaskResult {
     Err(String),
 }
 
-impl<'a, Op: Operation, Metadata: Serializable> Task<'a, Op, Metadata> {
+impl<Op: Operation, Metadata: Serializable> Task<'_, Op, Metadata> {
     /// Convert a [`Task`] into an opaque [`AnyTask`].
     pub fn as_any_task(&self, serializer: Serializer) -> Result<AnyTask> {
         let routing_key = self.routing_key.clone();
