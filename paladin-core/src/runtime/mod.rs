@@ -663,6 +663,7 @@ impl WorkerRuntime {
         let mut task_stream = self.get_task_receiver().await?;
 
         const TERMINATION_CLEAR_INTERVAL: Duration = Duration::from_secs(60);
+        // Give some time to executed tasks to gracefully finish
         const ABORT_SIGNAL_SHUTDOWN_INTERVAL: Duration = Duration::from_secs(10);
         // Keep track of terminated jobs to avoid processing new tasks associated to
         // them.
