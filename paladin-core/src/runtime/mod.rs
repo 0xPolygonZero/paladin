@@ -755,7 +755,8 @@ impl WorkerRuntime {
                     loop {
                         ipc_sig_term_rx.changed().await.expect("IPC channel closed");
                         let received_key = ipc_sig_term_rx.borrow().clone();
-                        debug!(routing_key = %routing_key, "received IPC termination signal with key: {received_key}");
+                        debug!(routing_key = %routing_key, received_key = %received_key,
+                            "received IPC termination signal");
 
                         if received_key == COMMAND_IPC_ABORT_ALL_KEY {
                             warn!(routing_key = %routing_key, "worker abort signal received");
