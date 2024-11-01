@@ -126,10 +126,15 @@ pub fn operation_derive(input: TokenStream) -> TokenStream {
 
                     // Spawn a blocking task to execute the operation.
                     let output = #paladin_path::__private::tokio::task::spawn_blocking(move || {
+                        let abort = abort.clone();
                         // Execute the operation, catching panics.
                         let typed_output = std::panic::catch_unwind(::std::panic::AssertUnwindSafe(||
-                            op.execute(input, abort)
+                            op.execute(input, abort.clone())
                         ))
+                        .inspect_err(|e|{
+                            let abort = abort.clone();
+                            #paladin_path::__private::tracing::error!(operation = %stringify!(#name), error = ?e, ">>>>>>> operation panicked, abort signal {abort:?}");
+                        })
                         // Convert panics to fatal operation errors.
                         .map_err(|_| #paladin_path::operation::FatalError::from_str(
                             &format!("operation {} panicked", stringify!(#name)),

@@ -568,16 +568,20 @@ impl WorkerRuntime {
         match strategy {
             FatalStrategy::Ignore => Ok(()),
             FatalStrategy::Terminate => {
+                tracing::warn!(">>>>>>>>>>>>>>>>>>>> Checkpoint 1");
                 // Notify other workers of the error.
                 let (ipc, sender) = try_join!(
                     self.get_command_ipc_sender(),
                     self.get_result_sender(routing_key.clone())
                 )?;
 
-                let ipc_msg = CommandIpc::ExecutionError { routing_key };
+                let abort_ipc_msg = CommandIpc::Abort {
+                    routing_key: COMMAND_IPC_ABORT_ALL_KEY.to_string(),
+                };
                 let sender_msg = AnyTaskResult::Err(err.to_string());
 
-                try_join!(ipc.publish(&ipc_msg), sender.publish(&sender_msg))?;
+                tracing::warn!(">>>>>>>>>>>>>>>>>>>> Checkpoint 2");
+                try_join!(ipc.publish(&abort_ipc_msg), sender.publish(&sender_msg))?;
                 try_join!(ipc.close(), sender.close())?;
 
                 Ok(())
@@ -682,6 +686,7 @@ impl WorkerRuntime {
 
         // Create a watch channel for signaling IPC changes while processing a task.
         let (ipc_sig_term_tx, ipc_sig_term_rx) = tokio::sync::watch::channel::<String>(identifier);
+        let abort_worker_execution = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         // Spawn a task that will listen for IPC termination signals and mark jobs as
         // terminated.
@@ -723,7 +728,6 @@ impl WorkerRuntime {
         }
 
         while let Some((payload, acker)) = task_stream.next().await {
-            let abort = Arc::new(std::sync::atomic::AtomicBool::new(false));
             // Skip tasks associated with terminated jobs.
             if terminated_jobs.contains_key(&payload.clone().routing_key) {
                 trace!(routing_key = %payload.clone().routing_key, "skipping terminated job");
@@ -736,7 +740,7 @@ impl WorkerRuntime {
             let routing_key_clone = routing_key.clone();
 
             let span = debug_span!("remote_execute", routing_key = %routing_key_clone);
-            let execution_task = payload.remote_execute(Some(abort.clone())).instrument(span);
+            let execution_task = payload.remote_execute(Some(abort_worker_execution.clone())).instrument(span);
 
             // Create a future that will wait for an IPC termination signal.
             let ipc_sig_term = {
@@ -745,10 +749,12 @@ impl WorkerRuntime {
                     loop {
                         ipc_sig_term_rx.changed().await.expect("IPC channel closed");
                         let received_key = ipc_sig_term_rx.borrow().clone();
+                        warn!(">>>>>>>>>>> IPC term signal changed, received key: {received_key}");
                         if received_key == routing_key_clone
                             || received_key == COMMAND_IPC_ABORT_ALL_KEY
                         {
-                            abort.store(true, Ordering::SeqCst);
+                            warn!(">>>>>>>>>>> Setting abort store to true, received key: {received_key}");
+                            abort_worker_execution.store(true, Ordering::SeqCst);
                             tokio::time::sleep(ABORT_SIGNAL_SHUTDOWN_INTERVAL).await;
                             return true;
                         }
@@ -772,6 +778,8 @@ impl WorkerRuntime {
                         Err(err) => {
                             error!(routing_key = %routing_key, "execution error: {err:?}");
                             mark_terminated(&terminated_jobs, routing_key.clone());
+
+                            warn!(">>>>>>>>>>> Setting abort store to true on error for routing key: {routing_key}");
 
                             try_join!(
                                 acker.nack(),
