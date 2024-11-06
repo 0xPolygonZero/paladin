@@ -14,6 +14,7 @@ use crate::{
     __private::OPERATIONS,
     operation::Operation,
     serializer::{Serializable, Serializer},
+    AbortSignal,
 };
 
 /// A [`Task`] encodes an [`Operation`] paired with arguments.
@@ -115,7 +116,7 @@ pub enum AnyTaskResult {
     Err(String),
 }
 
-impl<'a, Op: Operation, Metadata: Serializable> Task<'a, Op, Metadata> {
+impl<Op: Operation, Metadata: Serializable> Task<'_, Op, Metadata> {
     /// Convert a [`Task`] into an opaque [`AnyTask`].
     pub fn as_any_task(&self, serializer: Serializer) -> Result<AnyTask> {
         let routing_key = self.routing_key.clone();
@@ -161,7 +162,10 @@ impl AnyTask {
     /// [`RemoteExecute::ID`](crate::operation::RemoteExecute::ID) field to
     /// acquire the correct execution pointer from the [`static@OPERATIONS`]
     /// slice.
-    pub async fn remote_execute(self) -> crate::operation::Result<AnyTaskOutput> {
-        OPERATIONS[self.operation_id as usize](self).await
+    pub async fn remote_execute(
+        self,
+        abort: AbortSignal,
+    ) -> crate::operation::Result<AnyTaskOutput> {
+        OPERATIONS[self.operation_id as usize](self, abort).await
     }
 }

@@ -48,6 +48,7 @@
 //! communicate, and provides a simple interface for interacting with these
 //! channels.
 
+use std::sync::atomic::Ordering;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -58,7 +59,7 @@ use dashmap::{mapref::entry::Entry, DashMap};
 use futures::{stream::BoxStream, Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::{select, task::JoinHandle, try_join};
-use tracing::{debug_span, error, instrument, trace, warn, Instrument};
+use tracing::{debug, debug_span, error, instrument, trace, warn, Instrument};
 
 use self::dynamic_channel::{DynamicChannel, DynamicChannelFactory};
 use crate::{
@@ -113,7 +114,6 @@ type CoordinatedTaskChannel<'a, Op, Metadata> = (
 ///
 /// See the [runtime module documentation](crate::runtime) for more information
 /// on runtime semantics.
-
 pub struct Runtime {
     channel_factory: DynamicChannelFactory,
     task_channel: DynamicChannel,
@@ -122,8 +122,9 @@ pub struct Runtime {
     _marker: Marker,
 }
 
-const IPC_ROUTING_KEY: &str = "ipc-routing-key";
-pub const DEFAULT_ROUTING_KEY: &str = "default";
+pub const COMMAND_IPC_ROUTING_KEY: &str = "command-ipc-routing-key";
+pub const TASK_IPC_ROUTING_KEY: &str = "task-ipc-routing-key";
+pub const COMMAND_IPC_ABORT_ALL_KEY: &str = "abort-all-key";
 
 impl Runtime {
     /// Initializes the [`Runtime`] with the provided [`Config`].
@@ -134,7 +135,7 @@ impl Runtime {
                 config
                     .task_bus_routing_key
                     .clone()
-                    .unwrap_or_else(|| DEFAULT_ROUTING_KEY.to_string()),
+                    .unwrap_or_else(|| TASK_IPC_ROUTING_KEY.to_string()),
                 ChannelType::ExactlyOnce,
             )
             .await?;
@@ -264,6 +265,7 @@ impl Runtime {
     ///     runtime::Runtime,
     ///     task::Task,
     ///     operation::{Operation, Result},
+    ///     AbortSignal,
     /// };
     /// use serde::{Deserialize, Serialize};
     /// use futures::StreamExt;
@@ -278,7 +280,7 @@ impl Runtime {
     /// #    type Input = String;
     /// #    type Output = usize;
     /// #
-    /// #    fn execute(&self, input: Self::Input) -> Result<Self::Output> {
+    /// #    fn execute(&self, input: Self::Input, abort: AbortSignal) -> Result<Self::Output> {
     /// #       Ok(input.len())
     /// #    }
     /// # }
@@ -362,6 +364,19 @@ impl Runtime {
             LeaseGuard::new(result_channel, Box::new(ack_composed_receiver)),
         ))
     }
+
+    /// Get a [`Publisher`] for dispatching [`CommandIpc`] messages.
+    ///
+    /// Typically used by a leader node to send commands to workers (a.g. abort
+    /// work) or worker node to notify other workers of a fatal error.
+    #[instrument(skip(self), level = "trace")]
+    pub async fn get_command_ipc_sender(&self) -> Result<Sender<CommandIpc>> {
+        self.channel_factory
+            .get(COMMAND_IPC_ROUTING_KEY.to_string(), ChannelType::Broadcast)
+            .await?
+            .sender()
+            .await
+    }
 }
 
 /// Drop the worker emulator when the runtime is dropped.
@@ -402,10 +417,10 @@ pub struct ExecutionErr<E> {
     strategy: FatalStrategy,
 }
 
-/// Inter-process messages between workers.
+/// Command and error inter-process messages between leader and workers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum WorkerIpc {
-    ExecutionError { routing_key: String },
+pub enum CommandIpc {
+    Abort { routing_key: String },
 }
 
 impl WorkerRuntime {
@@ -417,7 +432,7 @@ impl WorkerRuntime {
                 config
                     .task_bus_routing_key
                     .clone()
-                    .unwrap_or_else(|| DEFAULT_ROUTING_KEY.to_string()),
+                    .unwrap_or_else(|| TASK_IPC_ROUTING_KEY.to_string()),
                 ChannelType::ExactlyOnce,
             )
             .await?;
@@ -442,30 +457,30 @@ impl WorkerRuntime {
             .await
     }
 
-    /// Get a [`Publisher`] for dispatching [`WorkerIpc`] messages.
+    /// Get a [`Publisher`] for dispatching [`CommandIpc`] messages.
     ///
-    /// Typically used by a worker node to notify other workers of a fatal
-    /// error.
+    /// Typically used by a leader node to send commands to workers (a.g. abort
+    /// work) or worker node to notify other workers of a fatal error.
     #[instrument(skip(self), level = "trace")]
-    pub async fn get_ipc_sender(&self) -> Result<Sender<WorkerIpc>> {
+    pub async fn get_command_ipc_sender(&self) -> Result<Sender<CommandIpc>> {
         self.channel_factory
-            .get(IPC_ROUTING_KEY.to_string(), ChannelType::Broadcast)
+            .get(COMMAND_IPC_ROUTING_KEY.to_string(), ChannelType::Broadcast)
             .await?
             .sender()
             .await
     }
 
-    /// Get a [`Stream`] for receiving [`WorkerIpc`] messages.
+    /// Get a [`Stream`] for receiving [`CommandIpc`] messages.
     ///
-    /// Typically used by a worker node to listen for fatal errors from other
-    /// workers.
+    /// Typically used by a worker node to listen for command instructions (e.g.
+    /// abort) from the leader or fatal errors from other workers.
     #[instrument(skip(self), level = "trace")]
-    pub async fn get_ipc_receiver(&self) -> Result<BoxStream<'static, WorkerIpc>> {
+    pub async fn get_command_ipc_receiver(&self) -> Result<BoxStream<'static, CommandIpc>> {
         let s = self
             .channel_factory
-            .get(IPC_ROUTING_KEY.to_string(), ChannelType::Broadcast)
+            .get(COMMAND_IPC_ROUTING_KEY.to_string(), ChannelType::Broadcast)
             .await?
-            .receiver::<WorkerIpc>()
+            .receiver::<CommandIpc>()
             .await?;
 
         Ok(s.then(|(message, acker)| async move {
@@ -490,6 +505,7 @@ impl WorkerRuntime {
     ///     registry,
     ///     runtime::WorkerRuntime,
     ///     operation::{Operation, Result},
+    ///     AbortSignal
     /// };
     /// use serde::{Deserialize, Serialize};
     /// use futures::StreamExt;
@@ -501,7 +517,7 @@ impl WorkerRuntime {
     /// #    type Input = String;
     /// #    type Output = usize;
     /// #
-    /// #    fn execute(&self, input: Self::Input) -> Result<Self::Output> {
+    /// #    fn execute(&self, input: Self::Input, abort: AbortSignal) -> Result<Self::Output> {
     /// #        Ok(input.len())
     /// #    }
     /// # }
@@ -551,16 +567,18 @@ impl WorkerRuntime {
         match strategy {
             FatalStrategy::Ignore => Ok(()),
             FatalStrategy::Terminate => {
-                // Notify other workers of the error.
+                // Notify leader of the error. Send abort command to all workers.
                 let (ipc, sender) = try_join!(
-                    self.get_ipc_sender(),
+                    self.get_command_ipc_sender(),
                     self.get_result_sender(routing_key.clone())
                 )?;
 
-                let ipc_msg = WorkerIpc::ExecutionError { routing_key };
+                let abort_ipc_msg = CommandIpc::Abort {
+                    routing_key: COMMAND_IPC_ABORT_ALL_KEY.to_string(),
+                };
                 let sender_msg = AnyTaskResult::Err(err.to_string());
 
-                try_join!(ipc.publish(&ipc_msg), sender.publish(&sender_msg))?;
+                try_join!(ipc.publish(&abort_ipc_msg), sender.publish(&sender_msg))?;
                 try_join!(ipc.close(), sender.close())?;
 
                 Ok(())
@@ -607,6 +625,7 @@ impl WorkerRuntime {
     ///     task::Task,
     ///     operation::{Result, Operation},
     ///     registry,
+    ///     AbortSignal
     /// };
     /// use clap::Parser;
     /// use serde::{Deserialize, Serialize};
@@ -616,7 +635,7 @@ impl WorkerRuntime {
     /// #    type Input = String;
     /// #    type Output = usize;
     /// #
-    /// #    fn execute(&self, input: Self::Input) -> Result<Self::Output> {
+    /// #    fn execute(&self, input: Self::Input, abort: AbortSignal) -> Result<Self::Output> {
     /// #       Ok(input.len())
     /// #    }
     /// # }
@@ -644,6 +663,8 @@ impl WorkerRuntime {
         let mut task_stream = self.get_task_receiver().await?;
 
         const TERMINATION_CLEAR_INTERVAL: Duration = Duration::from_secs(60);
+        // Give some time to executed tasks to gracefully finish
+        const ABORT_SIGNAL_SHUTDOWN_INTERVAL: Duration = Duration::from_secs(10);
         // Keep track of terminated jobs to avoid processing new tasks associated to
         // them.
         let terminated_jobs: Arc<DashMap<String, Instant>> = Default::default();
@@ -663,21 +684,21 @@ impl WorkerRuntime {
 
         // Create a watch channel for signaling IPC changes while processing a task.
         let (ipc_sig_term_tx, ipc_sig_term_rx) = tokio::sync::watch::channel::<String>(identifier);
+        let abort_worker_execution = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         // Spawn a task that will listen for IPC termination signals and mark jobs as
         // terminated.
-        let mut ipc_receiver = self.get_ipc_receiver().await?;
-        let remote_ipc_sig_term_handler = tokio::spawn({
+        let mut command_receiver = self.get_command_ipc_receiver().await?;
+        let remote_command_sig_term_handler = tokio::spawn({
             let terminated_jobs = terminated_jobs.clone();
 
             async move {
-                while let Some(ipc) = ipc_receiver.next().await {
+                while let Some(ipc) = command_receiver.next().await {
                     match ipc {
-                        WorkerIpc::ExecutionError { routing_key } => {
+                        CommandIpc::Abort { routing_key } => {
                             // Mark the job as terminated if it hasn't been already.
                             if mark_terminated(&terminated_jobs, routing_key.clone()) {
-                                warn!(routing_key = %routing_key, "received IPC termination signal");
-                                // Notify any currently executing tasks of the error.
+                                // Notify any currently executing task about the termination.
                                 ipc_sig_term_tx.send_replace(routing_key.clone());
                             }
                         }
@@ -703,6 +724,12 @@ impl WorkerRuntime {
         }
 
         while let Some((payload, acker)) = task_stream.next().await {
+            // If abort condition was previously set for some reason, stop processing tasks.
+            if abort_worker_execution.load(Ordering::SeqCst) {
+                warn!("stopping worker execution due to abort flag");
+                break;
+            }
+
             // Skip tasks associated with terminated jobs.
             if terminated_jobs.contains_key(&payload.clone().routing_key) {
                 trace!(routing_key = %payload.clone().routing_key, "skipping terminated job");
@@ -715,15 +742,25 @@ impl WorkerRuntime {
             let routing_key_clone = routing_key.clone();
 
             let span = debug_span!("remote_execute", routing_key = %routing_key_clone);
-            let execution_task = payload.remote_execute().instrument(span);
+            let execution_task = payload
+                .remote_execute(Some(abort_worker_execution.clone()))
+                .instrument(span);
 
             // Create a future that will wait for an IPC termination signal.
             let ipc_sig_term = {
                 let mut ipc_sig_term_rx = ipc_sig_term_rx.clone();
+                let abort_worker_execution = abort_worker_execution.clone();
+                let routing_key = routing_key.clone();
                 async move {
                     loop {
                         ipc_sig_term_rx.changed().await.expect("IPC channel closed");
-                        if *ipc_sig_term_rx.borrow() == routing_key_clone {
+                        let received_key = ipc_sig_term_rx.borrow().clone();
+                        debug!(routing_key = %routing_key, received_key = %received_key,
+                            "received IPC termination signal");
+
+                        if received_key == COMMAND_IPC_ABORT_ALL_KEY {
+                            warn!(routing_key = %routing_key, "worker abort signal received");
+                            abort_worker_execution.store(true, Ordering::SeqCst);
                             return true;
                         }
                     }
@@ -759,13 +796,16 @@ impl WorkerRuntime {
                     }
                 }
                 _ = ipc_sig_term => {
-                    warn!(routing_key = %routing_key, "task cancelled via IPC sigterm");
                     _ = acker.nack().await;
+                    // Give time to the execution_task to finish gracefully on abort signal before shutting down.
+                    tokio::time::sleep(ABORT_SIGNAL_SHUTDOWN_INTERVAL).await;
+                    warn!(routing_key = %routing_key, "worker execution stopped via IPC sigterm");
+                    break;
                 }
             }
         }
 
-        remote_ipc_sig_term_handler.abort();
+        remote_command_sig_term_handler.abort();
         reaper.abort();
 
         Ok(())

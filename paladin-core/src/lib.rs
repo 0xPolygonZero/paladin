@@ -53,7 +53,7 @@
 //! [`Directive`](crate::directive::Directive)s and remotely executed.
 //!
 //! ```
-//! use paladin::{RemoteExecute, operation::{Operation, Result}};
+//! use paladin::{RemoteExecute, operation::{Operation, Result}, AbortSignal,};
 //! use serde::{Deserialize, Serialize};
 //!
 //! #[derive(Serialize, Deserialize, RemoteExecute)]
@@ -63,7 +63,7 @@
 //!     type Input = u64;
 //!     type Output = u64;
 //!
-//!     fn execute(&self, input: Self::Input) -> Result<Self::Output> {
+//!     fn execute(&self, input: Self::Input, abort: AbortSignal) -> Result<Self::Output> {
 //!         match input {
 //!             0 => Ok(0),
 //!             1 => Ok(1),
@@ -82,7 +82,7 @@
 //! }
 //!
 //! # fn main() {
-//! assert_eq!(FibAt.execute(10).unwrap(), 55);
+//! assert_eq!(FibAt.execute(10, None).unwrap(), 55);
 //! # }
 //! ```
 //!
@@ -93,7 +93,7 @@
 //! program.
 //!
 //! ```
-//! use paladin::{RemoteExecute, operation::{Operation, Result}};
+//! use paladin::{RemoteExecute, operation::{Operation, Result}, AbortSignal};
 //! use serde::{Deserialize, Serialize};
 //! #
 //! # #[derive(Serialize, Deserialize, RemoteExecute)]
@@ -103,7 +103,7 @@
 //! #    type Input = u64;
 //! #    type Output = u64;
 //! #
-//! #    fn execute(&self, input: Self::Input) -> Result<Self::Output> {
+//! #    fn execute(&self, input: Self::Input, abort: AbortSignal) -> Result<Self::Output> {
 //! #        match input {
 //! #            0 => Ok(0),
 //! #            1 => Ok(1),
@@ -134,7 +134,7 @@
 //! impl Monoid for Sum {
 //!     type Elem = u64;
 //!
-//!     fn combine(&self, a: Self::Elem, b: Self::Elem) -> Result<Self::Elem> {
+//!     fn combine(&self, a: Self::Elem, b: Self::Elem, abort: AbortSignal) -> Result<Self::Elem> {
 //!        Ok(a + b)
 //!     }
 //!
@@ -220,6 +220,8 @@ pub mod task;
 pub use async_trait::async_trait;
 pub use paladin_opkind_derive::*;
 
+pub type AbortSignal = Option<std::sync::Arc<std::sync::atomic::AtomicBool>>;
+
 // Not public API. Used by generated code.
 #[doc(hidden)]
 pub mod __private {
@@ -238,6 +240,7 @@ pub mod __private {
     #[linkme::distributed_slice]
     pub static OPERATIONS: [fn(
         crate::task::AnyTask,
+        abort: crate::AbortSignal,
     ) -> futures::future::BoxFuture<
         'static,
         crate::operation::Result<crate::task::AnyTaskOutput>,

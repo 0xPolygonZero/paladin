@@ -154,6 +154,7 @@ pub enum FatalStrategy {
 ///     runtime::Runtime,
 ///     operation::{Operation, Result, FatalError, FatalStrategy},
 ///     directive::{Directive, IndexedStream},
+///     AbortSignal,
 /// };
 /// use serde::{Deserialize, Serialize};
 ///
@@ -164,7 +165,7 @@ pub enum FatalStrategy {
 ///     type Input = i64;
 ///     type Output = i64;
 ///     
-///     fn execute(&self, _: Self::Input) -> Result<Self::Output> {
+///     fn execute(&self, _: Self::Input, abort: AbortSignal) -> Result<Self::Output> {
 ///         FatalError::from_str(
 ///             "This operation will always fail.",
 ///             FatalStrategy::default()
@@ -196,6 +197,7 @@ pub enum FatalStrategy {
 ///     runtime::Runtime,
 ///     operation::{Operation, Monoid, Result, FatalError, FatalStrategy},
 ///     directive::{Directive, IndexedStream},
+///     AbortSignal,
 /// };
 /// use serde::{Deserialize, Serialize};
 ///
@@ -209,7 +211,7 @@ pub enum FatalStrategy {
 ///         0
 ///     }
 ///
-///     fn combine(&self, _: Self::Elem, _: Self::Elem) -> Result<Self::Elem> {
+///     fn combine(&self, _: Self::Elem, _: Self::Elem, abort: AbortSignal) -> Result<Self::Elem> {
 ///         FatalError::from_str(
 ///             "This operation will always fail.",
 ///             FatalStrategy::default()
@@ -237,6 +239,7 @@ pub enum FatalStrategy {
 ///     runtime::Runtime,
 ///     operation::{Operation, Monoid, Result},
 ///     directive::{Directive, IndexedStream, indexed_stream::try_from_into_iterator},
+///     AbortSignal
 /// };
 /// use serde::{Deserialize, Serialize};
 ///
@@ -250,7 +253,7 @@ pub enum FatalStrategy {
 ///         0
 ///     }
 ///
-///     fn combine(&self, a: Self::Elem, b: Self::Elem) -> Result<Self::Elem> {
+///     fn combine(&self, a: Self::Elem, b: Self::Elem, abort: AbortSignal) -> Result<Self::Elem> {
 ///         Ok(a * b)
 ///     }
 /// }
@@ -284,6 +287,7 @@ pub enum FatalStrategy {
 ///         FatalStrategy
 ///     },
 ///     directive::{Directive, IndexedStream},
+///     AbortSignal,
 /// };
 /// use serde::{Deserialize, Serialize};
 /// use std::sync::{Arc, atomic::{Ordering, AtomicBool}};
@@ -300,7 +304,7 @@ pub enum FatalStrategy {
 ///         0
 ///     }
 ///
-///     fn combine(&self, a: Self::Elem, b: Self::Elem) -> Result<Self::Elem> {
+///     fn combine(&self, a: Self::Elem, b: Self::Elem, abort: AbortSignal) -> Result<Self::Elem> {
 ///         if DID_TRY.swap(true, Ordering::SeqCst) {
 ///             return Ok(a * b);
 ///         }
@@ -342,6 +346,7 @@ pub enum FatalStrategy {
 ///         FatalStrategy
 ///     },
 ///     directive::{Directive, IndexedStream},
+///     AbortSignal,
 /// };
 /// use serde::{Deserialize, Serialize};
 ///
@@ -358,7 +363,7 @@ pub enum FatalStrategy {
 ///         0
 ///     }
 ///
-///     fn combine(&self, a: Self::Elem, b: Self::Elem) -> Result<Self::Elem> {
+///     fn combine(&self, a: Self::Elem, b: Self::Elem, abort: AbortSignal) -> Result<Self::Elem> {
 ///         let prev = NUM_TRIES.fetch_add(1, Ordering::SeqCst);
 ///
 ///         TransientError::from_str(

@@ -9,6 +9,7 @@
 /// #    operation::{Operation, Result},
 /// #    directive::{Directive, Literal},
 /// #    runtime::Runtime,
+/// #    AbortSignal
 /// # };
 /// # use serde::{Deserialize, Serialize};
 /// #
@@ -18,7 +19,7 @@
 ///     type Input = i32;
 ///     type Output = i32;
 ///
-///     fn execute(&self, input: i32) -> Result<i32> {
+///     fn execute(&self, input: i32, abort: AbortSignal) -> Result<i32> {
 ///         Ok(self.0 * input)
 ///     }
 /// }
