@@ -85,7 +85,7 @@ struct Dispatcher<'a, M: Monoid> {
     channel_identifier: String,
 }
 
-impl<'a, Op: Monoid + 'static> Dispatcher<'a, Op> {
+impl<Op: Monoid + 'static> Dispatcher<'_, Op> {
     /// Queue the given [`TaskResult`].
     async fn queue(&self, result: TaskOutput<Op, Metadata>) {
         self.assembler.queue(result);

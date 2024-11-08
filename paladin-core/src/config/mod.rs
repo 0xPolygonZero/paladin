@@ -25,25 +25,25 @@ const HELP_HEADING: &str = "Paladin options";
 #[derive(Args, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct Config {
     /// Determines the serialization format to be used.
-    #[arg(long, short, help_heading = HELP_HEADING, value_enum, default_value_t = Serializer::Postcard)]
+    #[arg(long, short, help_heading = HELP_HEADING, value_enum, env = "PALADIN_SERIALIZER", default_value_t = Serializer::Postcard)]
     pub serializer: Serializer,
 
     /// Specifies the runtime environment to use.
-    #[arg(long, short, help_heading = HELP_HEADING, value_enum, default_value_t = Runtime::Amqp)]
+    #[arg(long, short, help_heading = HELP_HEADING, value_enum, env = "PALADIN_RUNTIME", default_value_t = Runtime::Amqp)]
     pub runtime: Runtime,
 
     /// Specifies the number of worker threads to spawn (in memory runtime
     /// only).
-    #[arg(long, short, help_heading = HELP_HEADING)]
+    #[arg(long, short, help_heading = HELP_HEADING, env = "PALADIN_NUM_WORKERS")]
     pub num_workers: Option<usize>,
 
     /// Provides the URI for the AMQP broker, if the AMQP runtime is selected.
-    #[arg(long, help_heading = HELP_HEADING, env = "AMQP_URI", required_if_eq("runtime", "amqp"))]
+    #[arg(long, help_heading = HELP_HEADING, env = "PALADIN_AMQP_URI", required_if_eq("runtime", "amqp"))]
     pub amqp_uri: Option<String>,
 
     /// Provides the routing key for workers to listen on, if the AMQP runtime
     /// is used in configuration.
-    #[arg(long, help_heading = HELP_HEADING)]
+    #[arg(long, help_heading = HELP_HEADING, env = "PALADIN_TASK_BUS_ROUTING_KEY")]
     pub task_bus_routing_key: Option<String>,
 }
 
